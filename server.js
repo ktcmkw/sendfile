@@ -368,7 +368,17 @@ app.get('/api/docs/:id', auth, async (req, res) => {
   try {
     const { rows } = await query('SELECT * FROM documents WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
-    res.json(fmtDoc(rows[0]));
+    const doc = rows[0];
+    const u = req.user;
+    // Access check: admin / sender / direct recipient / same-dept recipient
+    const { rows: roleRows } = await query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]);
+    const perms = roleRows[0]?.permissions || {};
+    const canAccess = u.role_id === 'admin' || perms.can_view_all ||
+      doc.sender_username === u.username ||
+      doc.recipient_username === u.username ||
+      (doc.recipient_type === 'department' && doc.recipient_department === u.department);
+    if (!canAccess) return res.status(403).json({ error: 'ไม่มีสิทธิ์เข้าถึงเอกสารนี้' });
+    res.json(fmtDoc(doc));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -516,7 +526,18 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
         fromUsername: req.user.username, fromFullName: actorName, docId,
         message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
     }
-    if (delDoc.recipient_username && delDoc.recipient_username !== delDoc.sender_username) {
+    if (delDoc.recipient_type === 'department' && delDoc.recipient_department) {
+      // Notify all dept members (except sender) when a dept-addressed doc is deleted
+      const { rows: deptMembers } = await query(
+        'SELECT username FROM users WHERE department=$1 AND username!=$2',
+        [delDoc.recipient_department, delDoc.sender_username]
+      );
+      for (const m of deptMembers) {
+        await pushNotif(req.io, { type:'doc_deleted', toUsername: m.username,
+          fromUsername: req.user.username, fromFullName: actorName, docId,
+          message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
+      }
+    } else if (delDoc.recipient_username && delDoc.recipient_username !== delDoc.sender_username) {
       await pushNotif(req.io, { type:'doc_deleted', toUsername: delDoc.recipient_username,
         fromUsername: req.user.username, fromFullName: actorName, docId,
         message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });

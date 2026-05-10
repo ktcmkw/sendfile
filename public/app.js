@@ -85,8 +85,8 @@ function startPolling() {
     if (!getCurrentUser()) return;
     await syncFromServer();       // refresh data silently
     updateInboxBadge(); updateNotifBadge();
-    // Only re-render if socket is NOT connected (poll = sole data source)
-    if (!_socket?.connected && ['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
+    // Always re-render after poll so stale cache never persists on screen
+    if (['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
       navigate(currentPage);
     }
   }, 15000); // 15 seconds — socket.io handles instant updates; poll is fallback only
@@ -218,8 +218,8 @@ function formatDateShort(ts){ if(!ts)return'—'; const d=new Date(ts); return `
 function generateDocId(){ const docs=store.get(K.docs); const n=(docs.length+1).toString().padStart(4,'0'); return `DOC-${new Date().getFullYear()}-${n}`; }
 // ─── Notification popup (real-time alert) ─────────────────────────────────────
 function showNotifPopup(notif){
-  // Don't show popup for self-actions (sent_log, received_log)
-  const selfTypes=['doc_sent_log','doc_received_log'];
+  // Suppress popup only for received_log (redundant self-log), but show sent_log as confirmation
+  const selfTypes=['doc_received_log'];
   if(selfTypes.includes(notif.type)) return;
   const icon=notifIcon(notif.type)||'🔔';
   const label=notifTypeLabel(notif.type)||'แจ้งเตือน';
@@ -798,7 +798,7 @@ function canPreviewDocs(u){
 async function openDocPreviewModal(docId){
   let doc = await apiCall('GET', '/api/docs/'+docId);
   if(!doc) doc = getDocById(docId);
-  if(!doc) return;
+  if(!doc){ showToast('ไม่พบเอกสาร หรืออาจถูกลบไปแล้ว','error'); return; }
 
   // ── Avatar initials helper ────────────────────────────────────────────────
   function avatarHtml(name, color='blue'){
@@ -1350,7 +1350,7 @@ function navigate(page,params={}){
     case 'outbox':  syncFromServer().then(()=>renderOutbox()); break;
     case 'profile': renderProfile(); break;
     case 'admin':   renderAdmin(); break;
-    case 'notifs':  renderNotifs(); break;
+    case 'notifs':  syncFromServer().then(()=>renderNotifs()); break;
     case 'qr':      renderQRViewer(params.docId); break;
   }
 }
