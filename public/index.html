@@ -772,7 +772,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 
 </style>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="/socket.io/socket.io.js"></script>
+<script src="/socket.io/socket.io.js" defer></script>
 </head>
 <body>
 
@@ -964,11 +964,14 @@ function showAuth() {
 // Socket.io — connect after DOM ready
 let _socket = null;
 function connectSocket(username) {
+  if (typeof io === 'undefined') return; // socket.io ยังไม่โหลด — ใช้ polling แทน
   if (_socket) _socket.disconnect();
-  _socket = io();
-  _socket.emit('join', username);
-  _socket.on('doc_update', async () => { await syncFromServer(); updateInboxBadge(); updateNotifBadge(); const pg=document.querySelector('.page.active'); if(pg) navigate(pg.dataset.page||'home'); });
-  _socket.on('new_notif',  async () => { await syncFromServer(); updateNotifBadge(); });
+  try {
+    _socket = io({ transports: ['websocket','polling'] });
+    _socket.emit('join', username);
+    _socket.on('doc_update', async () => { await syncFromServer(); updateInboxBadge(); updateNotifBadge(); const pg=document.querySelector('.page.active'); if(pg) navigate(pg.dataset.page||'home'); });
+    _socket.on('new_notif',  async () => { await syncFromServer(); updateNotifBadge(); });
+  } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
 
 const store = {

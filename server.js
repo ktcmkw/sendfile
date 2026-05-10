@@ -12,7 +12,10 @@ const httpServer = createServer(app);
 const io         = new Server(httpServer, { cors: { origin: '*' } });
 
 app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve static: support both public/ folder and root index.html
+const fs = require('fs');
+const PUBLIC_DIR = fs.existsSync(path.join(__dirname,'public')) ? path.join(__dirname,'public') : __dirname;
+app.use(express.static(PUBLIC_DIR));
 app.use((req, res, next) => { req.io = io; next(); });
 
 // ─── JWT Middleware ───────────────────────────────────────────────────────────
@@ -379,7 +382,7 @@ io.on('connection', socket => {
 
 // ─── SPA Fallback ─────────────────────────────────────────────────
 app.get('*', (req, res) =>
-  res.sendFile(path.join(__dirname, 'public', 'index.html')));
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
 // ─── Start ────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
