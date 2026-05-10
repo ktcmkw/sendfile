@@ -133,6 +133,7 @@ async function syncFromServer() {
   // Single /api/sync call replaces 6 separate API calls — much faster
   const data = await apiCall('GET', '/api/sync');
   if (!data) return;
+  _lastSyncTime = Date.now();
   const isArr = v => Array.isArray(v);
   const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
   if (isArr(data.users))     localStorage.setItem(K.users,  JSON.stringify(data.users));
@@ -162,17 +163,23 @@ function showAuth() {
 let _socket = null;
 // ── Polling fallback: sync every 15s (Socket.io handles real-time; poll is safety net) ──
 let _pollInterval = null;
+let _lastSyncTime = 0;
 function startPolling() {
   if (_pollInterval) clearInterval(_pollInterval);
   _pollInterval = setInterval(async () => {
     if (!getCurrentUser()) return;
-    await syncFromServer();       // refresh data silently
+    // Smart interval: 5s on inbox/outbox (user expects live updates), 15s elsewhere
+    const activePage = currentPage;
+    const isLivePage = ['inbox','outbox'].includes(activePage);
+    const elapsed = Date.now() - _lastSyncTime;
+    if (!isLivePage && elapsed < 15000) return; // skip if polled recently on non-live page
+    await syncFromServer();
+    _lastSyncTime = Date.now();
     updateInboxBadge(); updateNotifBadge();
-    // Always re-render after poll so stale cache never persists on screen
-    if (['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
-      navigate(currentPage);
+    if (['home','inbox','outbox','admin','notifs'].includes(activePage)) {
+      navigate(activePage);
     }
-  }, 15000); // 15 seconds — socket.io handles instant updates; poll is fallback only
+  }, 5000); // 5s tick — smart interval logic above controls actual sync frequency
 }
 function stopPolling() { if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; } }
 
@@ -215,6 +222,10 @@ function connectSocket(username) {
       } else {
         // Reconnect after server sleep or network drop — must re-fetch to get missed events
         console.log('[socket] reconnected, syncing fresh data...');
+        // Force-fetch docs directly (faster than full sync for inbox)
+        apiCall('GET','/api/docs/all-meta').then(d=>{
+          if(Array.isArray(d)){localStorage.setItem(K.docs,JSON.stringify(d));_lastSyncTime=Date.now();}
+        }).catch(()=>{});
         await syncFromServer();
         updateInboxBadge(); updateNotifBadge();
         if (['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
@@ -1924,31 +1935,56 @@ function renderWizardSuccess(doc){
 // INBOX
 // ===================================================================
 let inboxFilter='all';
+async function forceRefreshInbox() {
+  const icon = document.getElementById('inbox-refresh-icon');
+  if (icon) icon.style.animation = 'spin 1s linear infinite';
+  const label = document.getElementById('inbox-sync-label');
+  if (label) label.textContent = '🔄 กำลังโหลด…';
+  try {
+    const data = await apiCall('GET','/api/docs/all-meta');
+    if (Array.isArray(data)) {
+      localStorage.setItem(K.docs, JSON.stringify(data));
+      _lastSyncTime = Date.now();
+    }
+  } catch(_) {}
+  renderInbox();
+  updateInboxBadge();
+}
+
 function renderInbox(){
   setPageTitle('เอกสารที่ได้รับ','📥');
   const user=getCurrentUser();
-  // Fetch fresh docs from server (fixes stale cache when socket was down)
-  syncFromServer().then(()=>{
-    const u2=getCurrentUser();
-    const freshDocs=getInboxDocs(u2);
-    updateInboxBadge();
-    if(currentPage==='inbox'){
-      const pCount=freshDocs.filter(d=>d.status==='pending').length;
-      const rCount=freshDocs.filter(d=>d.status==='received').length;
-      const chips=document.querySelector('.inbox-chips');
-      const list=document.querySelector('.inbox-list-wrap');
-      if(chips||list) renderInbox(); // re-render only if still on page
-    }
-  }).catch(()=>{});
+  // Auto-refresh if data is stale (>8s since last sync) — catches socket-missed events
+  const stale = Date.now() - _lastSyncTime > 8000;
+  if (stale) {
+    apiCall('GET','/api/docs/all-meta').then(data => {
+      if (Array.isArray(data)) {
+        localStorage.setItem(K.docs, JSON.stringify(data));
+        _lastSyncTime = Date.now();
+        if (currentPage==='inbox') renderInbox();
+      }
+    }).catch(()=>{});
+  }
   const docs=getInboxDocs(user).sort((a,b)=>b.createdAt-a.createdAt);
   const filtered=inboxFilter==='all'?docs:inboxFilter==='pending'?docs.filter(d=>d.status==='pending'):docs.filter(d=>d.status==='received');
   const pCount=docs.filter(d=>d.status==='pending').length;
   const rCount=docs.filter(d=>d.status==='received').length;
+  const syncAgo = _lastSyncTime ? Math.round((Date.now()-_lastSyncTime)/1000) : null;
+  const syncLabel = syncAgo===null?'ยังไม่ได้ซิงค์':syncAgo<5?'เพิ่งอัพเดท':`${syncAgo} วิที่แล้ว`;
   document.getElementById('page-body').innerHTML=`
-  <div class="filter-bar">
-    <span class="filter-chip${inboxFilter==='all'?' active':''}" onclick="inboxFilter='all';renderInbox()">ทั้งหมด (${docs.length})</span>
-    <span class="filter-chip${inboxFilter==='pending'?' active':''}" onclick="inboxFilter='pending';renderInbox()">รอรับ (${pCount})</span>
-    <span class="filter-chip${inboxFilter==='received'?' active':''}" onclick="inboxFilter='received';renderInbox()">รับแล้ว (${rCount})</span>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:6px;">
+    <div class="filter-bar" style="margin-bottom:0;">
+      <span class="filter-chip${inboxFilter==='all'?' active':''}" onclick="inboxFilter='all';renderInbox()">ทั้งหมด (${docs.length})</span>
+      <span class="filter-chip${inboxFilter==='pending'?' active':''}" onclick="inboxFilter='pending';renderInbox()">รอรับ (${pCount})</span>
+      <span class="filter-chip${inboxFilter==='received'?' active':''}" onclick="inboxFilter='received';renderInbox()">รับแล้ว (${rCount})</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span id="inbox-sync-label" style="font-size:11px;color:var(--muted);">🔄 ${syncLabel}</span>
+      <button onclick="forceRefreshInbox()" title="รีเฟรช" style="background:none;border:1px solid var(--border);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+        <svg id="inbox-refresh-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        รีเฟรช
+      </button>
+    </div>
   </div>
   <div class="doc-list">
   ${filtered.length===0?'<div class="empty-state"><p>ไม่มีเอกสาร</p></div>':
