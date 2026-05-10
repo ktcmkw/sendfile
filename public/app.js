@@ -179,6 +179,12 @@ function connectSocket(username) {
       updateNotifBadge(); updateInboxBadge();
       if(currentPage==='notifs') navigate('notifs');
     });
+    // force_sync: server tells ALL clients to re-fetch from DB (used after admin clears data)
+    _socket.on('force_sync', async () => {
+      await syncFromServer();
+      updateNotifBadge(); updateInboxBadge();
+      if(['inbox','outbox','home','notifs','admin'].includes(currentPage)) navigate(currentPage);
+    });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
 
@@ -1753,7 +1759,8 @@ function renderInbox(){
   <div class="doc-list">
   ${filtered.length===0?'<div class="empty-state"><p>ไม่มีเอกสาร</p></div>':
     filtered.map(doc=>`
-    <div class="doc-card${doc.priority==='very_urgent'&&doc.status==='pending'?' urgent':''}">
+    <div class="doc-card${doc.priority==='very_urgent'&&doc.status==='pending'?' urgent':''} inbox-card-clickable"
+         onclick="openDocPreviewModal('${doc.id}')" style="cursor:pointer;" title="คลิกเพื่อดูเอกสาร">
       <div class="doc-icon${doc.status==='received'?' ok':doc.priority==='very_urgent'?' warn':''}">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
       </div>
@@ -1761,11 +1768,11 @@ function renderInbox(){
         <div class="doc-title">${escapeHtml(doc.title)}</div>
         <div class="doc-meta">จาก: ${escapeHtml(doc.senderFullName)} · ${escapeHtml(doc.senderDepartment)} · ${formatDateShort(doc.createdAt)} ${doc.status==='received'?'· เก็บที่: <strong>'+escapeHtml(doc.storageLocation)+'</strong>':''}</div>
       </div>
-      <div class="doc-actions">
+      <div class="doc-actions" onclick="event.stopPropagation()">
         ${priorityBadge(doc.priority)}
         ${doc.status==='pending'
-  ?`<button class="btn-outline btn-sm" onclick="navigate('qr',{docId:'${doc.id}'})">👁 ดูเอกสาร</button><button class="btn-primary btn-sm" onclick="openReceiveModal('${doc.id}')">✓ รับเอกสาร</button>`
-  :`<button class="btn-outline btn-sm" onclick="navigate('qr',{docId:'${doc.id}'})">👁 ดูเอกสาร</button><span class="badge badge-received">รับแล้ว</span>`}
+  ?`<button class="btn-outline btn-sm" onclick="event.stopPropagation();openDocPreviewModal('${doc.id}')">👁 ดู</button><button class="btn-primary btn-sm" onclick="event.stopPropagation();openReceiveModal('${doc.id}')">✓ รับเอกสาร</button>`
+  :`<button class="btn-outline btn-sm" onclick="event.stopPropagation();openDocPreviewModal('${doc.id}')">👁 ดู</button><span class="badge badge-received">รับแล้ว ✓</span>`}
       </div>
     </div>`).join('')}
   </div>`;

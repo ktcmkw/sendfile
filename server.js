@@ -824,6 +824,7 @@ app.post('/api/admin/clear-docs', auth, admin, async (req, res) => {
     await query('DELETE FROM documents');
     await auditLog('clear_docs', req.user.username, null, {}, req.ip);
     req.io.emit('doc_update', { type: 'clear_all' });
+    req.io.emit('force_sync');  // force all clients to re-fetch from DB
     res.json({ ok: true });
   } catch(e) { console.error('[clear-docs]', e); res.status(500).json({ error: e.message }); }
 });
@@ -839,7 +840,9 @@ app.post('/api/admin/clear-notifs', auth, admin, async (req, res) => {
     if (!ok) return res.status(403).json({ error: 'Passkey ไม่ถูกต้อง' });
     await query('DELETE FROM notifications');
     await auditLog('clear_notifs', req.user.username, null, {}, req.ip);
+    // Emit to ALL sockets — both notifs_cleared (instant UI) AND force_sync (re-fetches DB)
     req.io.emit('notifs_cleared');
+    req.io.emit('force_sync');   // catches users whose socket reconnected after clear
     res.json({ ok: true });
   } catch(e) { console.error('[clear-notifs]', e); res.status(500).json({ error: e.message }); }
 });
