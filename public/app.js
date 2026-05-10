@@ -22,6 +22,30 @@ const BASE_URL = (()=>{
   return window.location.href.replace(/[?#].*$/, '').replace(/\/$/, '');
 })();
 const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
+const REMEMBER_KEY = 'sf_doc_session'; // 24h remembered doc-preview session
+
+// ── 24h Doc-preview session helpers ─────────────────────────────
+function saveDocSession(token, username) {
+  try {
+    localStorage.setItem(REMEMBER_KEY, JSON.stringify({
+      token, username,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000
+    }));
+  } catch(_) {}
+}
+function getDocSession() {
+  try {
+    const raw = localStorage.getItem(REMEMBER_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || !s.token || !s.expiresAt) return null;
+    if (Date.now() > s.expiresAt) { localStorage.removeItem(REMEMBER_KEY); return null; }
+    return s;
+  } catch(_) { return null; }
+}
+function clearDocSession() {
+  localStorage.removeItem(REMEMBER_KEY);
+}
 
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
@@ -1181,6 +1205,7 @@ async function handlePasskeyLogin(){
 
 function handleLogout(){
   stopPolling();
+  clearDocSession();
   _jwt=null; sessionStorage.removeItem(_JWT_KEY);
   if(_socket){ _socket.disconnect(); _socket=null; }
   localStorage.removeItem(K.session);
@@ -2810,5 +2835,404 @@ function printEnvelope(docId){
 }
 
 // ===================================================================
-// INIT
+// ===================================================================
+// MOBILE FAB MENU
+// ===================================================================
+function showFabMenu() {
+  if (document.getElementById('fab-menu-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'fab-menu-overlay';
+  overlay.className = 'fab-menu-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) closeFabMenu(); };
+
+  overlay.innerHTML = `
+    <div class="fab-menu" id="fab-menu">
+      <button class="fab-menu-item" onclick="closeFabMenu();navigate('create')">
+        <span class="fab-menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="12" y1="11" x2="12" y2="17"/>
+            <line x1="9" y1="14" x2="15" y2="14"/>
+          </svg>
+        </span>
+        <span class="fab-menu-label">สร้างเอกสาร</span>
+      </button>
+      <button class="fab-menu-item" onclick="closeFabMenu();showQrScanner()">
+        <span class="fab-menu-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/>
+            <rect x="5" y="5" width="3" height="3" fill="currentColor" stroke="none"/>
+            <rect x="16" y="5" width="3" height="3" fill="currentColor" stroke="none"/>
+            <rect x="5" y="16" width="3" height="3" fill="currentColor" stroke="none"/>
+            <path d="M14 14h2v2h-2zm4 0h2v2h-2zm-4 4h2v2h-2zm4-2h2v4h-2z"/>
+          </svg>
+        </span>
+        <span class="fab-menu-label">สแกน QR Code</span>
+      </button>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('fab-menu-overlay--open'));
+}
+
+function closeFabMenu() {
+  const el = document.getElementById('fab-menu-overlay');
+  if (!el) return;
+  el.classList.remove('fab-menu-overlay--open');
+  setTimeout(() => el.remove(), 200);
+}
+
+// ── QR Scanner (uses jsQR via CDN) ──────────────────────────────
+function showQrScanner() {
+  if (document.getElementById('qr-scanner-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'qr-scanner-overlay';
+  overlay.className = 'doc-preview-overlay';
+  overlay.innerHTML = `
+    <div class="doc-preview-card" style="max-width:400px;text-align:center;">
+      <div class="doc-preview-header">
+        <span style="font-weight:600;font-size:1rem;">สแกน QR Code เอกสาร</span>
+        <button class="doc-preview-close" onclick="closeQrScanner()">✕</button>
+      </div>
+      <div class="doc-preview-body">
+        <p style="color:var(--gray);font-size:.85rem;margin-bottom:12px;">เล็งกล้องไปที่ QR Code บนซองเอกสาร</p>
+        <div style="position:relative;background:#000;border-radius:8px;overflow:hidden;aspect-ratio:1;">
+          <video id="qr-video" autoplay playsinline style="width:100%;height:100%;object-fit:cover;"></video>
+          <canvas id="qr-canvas" style="display:none;"></canvas>
+          <div style="position:absolute;inset:20%;border:2px solid rgba(255,255,255,.7);border-radius:8px;pointer-events:none;"></div>
+        </div>
+        <div id="qr-status" style="margin-top:10px;color:var(--gray);font-size:.85rem;">กำลังเปิดกล้อง…</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  // Load jsQR if not already loaded
+  if (!window.jsQR) {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+    script.onload = () => startQrScan();
+    document.head.appendChild(script);
+  } else {
+    startQrScan();
+  }
+}
+
+function closeQrScanner() {
+  const el = document.getElementById('qr-scanner-overlay');
+  if (el) el.remove();
+  stopQrScan();
+}
+
+let _qrStream = null;
+let _qrInterval = null;
+function stopQrScan() {
+  if (_qrInterval) { clearInterval(_qrInterval); _qrInterval = null; }
+  if (_qrStream) { _qrStream.getTracks().forEach(t => t.stop()); _qrStream = null; }
+}
+
+async function startQrScan() {
+  const video = document.getElementById('qr-video');
+  const canvas = document.getElementById('qr-canvas');
+  const status = document.getElementById('qr-status');
+  if (!video || !canvas) return;
+
+  try {
+    _qrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = _qrStream;
+    video.play();
+    if (status) status.textContent = 'กำลังสแกน…';
+
+    _qrInterval = setInterval(() => {
+      if (!document.getElementById('qr-video')) { stopQrScan(); return; }
+      if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = window.jsQR && window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      if (code && code.data) {
+        stopQrScan();
+        closeQrScanner();
+        // Parse URL → extract ?doc= param
+        try {
+          const url = new URL(code.data);
+          const docId = url.searchParams.get('doc');
+          if (docId) {
+            showDocPreviewScreen(docId);
+          } else {
+            showToast('QR นี้ไม่ใช่ลิงก์เอกสาร SendFile', 'error');
+          }
+        } catch(_) {
+          showToast('อ่าน QR ไม่ได้: ' + code.data, 'error');
+        }
+      }
+    }, 300);
+  } catch(e) {
+    if (status) status.textContent = 'ไม่สามารถเปิดกล้องได้: ' + e.message;
+  }
+}
+
+// ===================================================================
+// DOC PREVIEW DEEP LINK SCREEN
+// ===================================================================
+function showDocPreviewScreen(docId) {
+  if (document.getElementById('doc-preview-overlay')) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'doc-preview-overlay';
+  overlay.className = 'doc-preview-overlay';
+
+  overlay.innerHTML = `
+    <div class="doc-preview-card">
+      <div class="doc-preview-header">
+        <div>
+          <div style="font-weight:700;font-size:1rem;color:var(--text);">ดูตัวอย่างเอกสาร</div>
+          <div style="font-size:.78rem;color:var(--gray);margin-top:2px;">${escapeHtml(docId)}</div>
+        </div>
+        <button class="doc-preview-close" onclick="closeDocPreview();window.location.href=window.location.pathname">✕</button>
+      </div>
+      <div class="doc-preview-body">
+        <p style="color:var(--gray);font-size:.88rem;margin-bottom:18px;line-height:1.5;">
+          กรุณากรอก Passkey 6 หลักของคุณ<br>เพื่อยืนยันตัวตนและดูเอกสาร
+        </p>
+        <div style="display:flex;gap:8px;justify-content:center;margin-bottom:18px;" id="pin-boxes">
+          ${Array(6).fill(0).map((_,i)=>`<input type="password" inputmode="numeric" maxlength="1" class="pin-box" id="pin-${i}" data-idx="${i}">`).join('')}
+        </div>
+        <div id="doc-preview-err" style="color:#dc2626;font-size:.83rem;min-height:20px;text-align:center;margin-bottom:10px;"></div>
+        <button class="btn btn--primary" style="width:100%;" id="doc-preview-submit-btn" onclick="handleDocPreviewPasskey('${escapeHtml(docId)}')">
+          ยืนยัน Passkey
+        </button>
+        <button class="btn" style="width:100%;margin-top:8px;" onclick="closeDocPreview();window.location.href=window.location.pathname">
+          ยกเลิก / กลับหน้าล็อกอิน
+        </button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  // Wire up PIN box auto-advance
+  const boxes = overlay.querySelectorAll('.pin-box');
+  boxes.forEach((box, i) => {
+    box.addEventListener('input', () => {
+      if (box.value && i < 5) boxes[i+1].focus();
+      if (getPinValue().length === 6) handleDocPreviewPasskey(docId);
+    });
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !box.value && i > 0) boxes[i-1].focus();
+    });
+  });
+  setTimeout(() => boxes[0] && boxes[0].focus(), 100);
+}
+
+function getPinValue() {
+  const boxes = document.querySelectorAll('#doc-preview-overlay .pin-box');
+  return Array.from(boxes).map(b => b.value).join('');
+}
+
+function closeDocPreview() {
+  const el = document.getElementById('doc-preview-overlay');
+  if (el) el.remove();
+}
+
+async function handleDocPreviewPasskey(docId) {
+  const passkey = getPinValue();
+  if (passkey.length !== 6) {
+    const errEl = document.getElementById('doc-preview-err');
+    if (errEl) errEl.textContent = 'กรุณากรอก Passkey ให้ครบ 6 หลัก';
+    return;
+  }
+
+  const btn = document.getElementById('doc-preview-submit-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'กำลังตรวจสอบ…'; }
+  const errEl = document.getElementById('doc-preview-err');
+  if (errEl) errEl.textContent = '';
+
+  try {
+    const res = await fetch('/api/auth/doc-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passkey, docId })
+    });
+    const data = await res.json();
+
+    if (res.status === 401) {
+      if (errEl) errEl.textContent = 'Passkey ไม่ถูกต้อง';
+      if (btn) { btn.disabled = false; btn.textContent = 'ยืนยัน Passkey'; }
+      // Clear PIN boxes
+      document.querySelectorAll('#doc-preview-overlay .pin-box').forEach(b => b.value = '');
+      const boxes = document.querySelectorAll('#doc-preview-overlay .pin-box');
+      if (boxes[0]) boxes[0].focus();
+      return;
+    }
+
+    if (res.status === 403) {
+      closeDocPreview();
+      // Show access-denied screen then redirect to login
+      showDocAccessDenied();
+      return;
+    }
+
+    if (res.status === 404) {
+      if (errEl) errEl.textContent = 'ไม่พบเอกสาร: ' + docId;
+      if (btn) { btn.disabled = false; btn.textContent = 'ยืนยัน Passkey'; }
+      return;
+    }
+
+    if (!res.ok) {
+      if (errEl) errEl.textContent = data.error || 'เกิดข้อผิดพลาด';
+      if (btn) { btn.disabled = false; btn.textContent = 'ยืนยัน Passkey'; }
+      return;
+    }
+
+    // ✅ Success — save 24h session, set JWT, show doc
+    saveDocSession(data.token, data.username);
+    _jwt = data.token;
+    sessionStorage.setItem(_JWT_KEY, _jwt);
+    seedCurrentUser(data.user);
+
+    closeDocPreview();
+
+    // Show document in preview modal then close → go to main app
+    showDocPreviewModal(data.doc, () => {
+      // After user closes preview, clean URL and load app normally
+      window.history.replaceState(null, '', window.location.pathname);
+      syncFromServer();
+      showMain();
+    });
+
+  } catch(e) {
+    if (errEl) errEl.textContent = 'เกิดข้อผิดพลาดในการเชื่อมต่อ';
+    if (btn) { btn.disabled = false; btn.textContent = 'ยืนยัน Passkey'; }
+  }
+}
+
+function showDocAccessDenied() {
+  const overlay = document.createElement('div');
+  overlay.className = 'doc-preview-overlay';
+  overlay.style.zIndex = '9998';
+  overlay.innerHTML = `
+    <div class="doc-preview-card" style="text-align:center;max-width:340px;">
+      <div style="font-size:3rem;margin-bottom:12px;">🔒</div>
+      <div style="font-weight:700;font-size:1.05rem;color:var(--text);margin-bottom:8px;">ไม่มีสิทธิ์ดูเอกสารนี้</div>
+      <p style="color:var(--gray);font-size:.88rem;margin-bottom:20px;">คุณไม่มีสิทธิ์เข้าถึงเอกสารนี้<br>กรุณาติดต่อผู้ส่งเอกสาร</p>
+      <button class="btn btn--primary" style="width:100%;" onclick="this.closest('.doc-preview-overlay').remove();window.location.href=window.location.pathname">
+        กลับหน้าล็อกอิน
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => {
+    overlay.remove();
+    window.location.href = window.location.pathname;
+  }, 4000);
+}
+
+function showDocPreviewModal(doc, onClose) {
+  if (!doc) { if (onClose) onClose(); return; }
+  const overlay = document.createElement('div');
+  overlay.id = 'doc-preview-modal';
+  overlay.className = 'doc-preview-overlay';
+
+  const statusLabels = { pending: 'รอดำเนินการ', approved: 'อนุมัติแล้ว', rejected: 'ปฏิเสธ', completed: 'เสร็จสิ้น' };
+  const priorityColors = { urgent: '#dc2626', high: '#ea580c', normal: '#2563eb', low: '#6b7280' };
+  const priorityLabels = { urgent: '🔴 เร่งด่วนมาก', high: '🟠 เร่งด่วน', normal: '🔵 ปกติ', low: '⚪ ไม่เร่งด่วน' };
+
+  overlay.innerHTML = `
+    <div class="doc-preview-card" style="max-width:520px;">
+      <div class="doc-preview-header">
+        <div>
+          <div style="font-weight:700;font-size:1rem;">${escapeHtml(doc.title||'(ไม่มีหัวข้อ)')}</div>
+          <div style="font-size:.75rem;color:var(--gray);">${escapeHtml(doc.id||'')}</div>
+        </div>
+        <button class="doc-preview-close" id="dpm-close-btn">✕</button>
+      </div>
+      <div class="doc-preview-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+          <div class="dp-info-row"><span class="dp-label">ผู้ส่ง</span><span>${escapeHtml(doc.senderFullName||doc.senderUsername||'')}</span></div>
+          <div class="dp-info-row"><span class="dp-label">แผนก</span><span>${escapeHtml(doc.senderDepartment||'')}</span></div>
+          <div class="dp-info-row"><span class="dp-label">ถึง</span><span>${escapeHtml(doc.recipientFullName||doc.recipientDepartment||doc.recipientUsername||'')}</span></div>
+          <div class="dp-info-row"><span class="dp-label">วันที่</span><span>${doc.createdAt ? new Date(doc.createdAt).toLocaleDateString('th-TH') : ''}</span></div>
+          <div class="dp-info-row"><span class="dp-label">ความเร่งด่วน</span><span style="color:${priorityColors[doc.priority]||''};">${priorityLabels[doc.priority]||doc.priority||''}</span></div>
+          <div class="dp-info-row"><span class="dp-label">สถานะ</span><span>${statusLabels[doc.status]||doc.status||''}</span></div>
+        </div>
+        ${doc.content ? `<div style="background:var(--surface);border-radius:8px;padding:12px;font-size:.88rem;color:var(--text);white-space:pre-wrap;max-height:180px;overflow-y:auto;margin-bottom:14px;">${escapeHtml(doc.content)}</div>` : ''}
+        ${doc.attachments && doc.attachments.length ? `
+          <div style="font-size:.82rem;color:var(--gray);margin-bottom:8px;">ไฟล์แนบ: ${doc.attachments.length} ไฟล์</div>
+        ` : ''}
+        <button class="btn btn--primary" style="width:100%;margin-top:4px;" id="dpm-continue-btn">
+          เข้าสู่ระบบต่อ →
+        </button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const close = () => { overlay.remove(); if (onClose) onClose(); };
+  document.getElementById('dpm-close-btn').onclick = close;
+  document.getElementById('dpm-continue-btn').onclick = close;
+}
+
+// ===================================================================
+// INIT — runs on page load
+// ===================================================================
+(function initApp() {
+  const params = new URLSearchParams(window.location.search);
+  const docIdParam = params.get('doc');
+
+  if (docIdParam) {
+    // ── Deep link mode: ?doc=DOC-XXXX ─────────────────────────────
+    // Check if there's a valid remembered 24h session for this device
+    const remembered = getDocSession();
+    if (remembered && remembered.token) {
+      // Restore JWT from remembered session and try to load the doc directly
+      _jwt = remembered.token;
+      sessionStorage.setItem(_JWT_KEY, _jwt);
+      // Show the app shell, then open the doc
+      syncFromServer();
+      showMain();
+      // Give the app a moment to render, then open the doc preview
+      setTimeout(async () => {
+        try {
+          const res = await apiCall('GET', '/api/docs/' + encodeURIComponent(docIdParam));
+          if (res) {
+            showDocPreviewModal(res, () => {
+              window.history.replaceState(null, '', window.location.pathname);
+            });
+          } else {
+            // Token may have expired — show passkey screen again
+            clearDocSession();
+            _jwt = null;
+            sessionStorage.removeItem(_JWT_KEY);
+            showDocPreviewScreen(docIdParam);
+          }
+        } catch(_) {
+          showDocPreviewScreen(docIdParam);
+        }
+      }, 800);
+    } else {
+      // No remembered session — show passkey screen immediately
+      // Show minimal app shell first so background renders correctly
+      document.body.style.opacity = '0';
+      setTimeout(() => {
+        document.body.style.opacity = '1';
+        showDocPreviewScreen(docIdParam);
+      }, 100);
+    }
+  } else {
+    // ── Normal mode: no ?doc= param ───────────────────────────────
+    // Check if there's a valid 24h remembered session (non-doc-specific auto-login)
+    const jwt_stored = sessionStorage.getItem(_JWT_KEY);
+    if (jwt_stored) {
+      _jwt = jwt_stored;
+      // Already logged in (session still alive) — go straight to app
+      syncFromServer();
+      showMain();
+    } else {
+      // No session — show auth screen
+      showAuth();
+    }
+  }
+})();
 // ==================================

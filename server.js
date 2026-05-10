@@ -106,6 +106,7 @@ function admin(req, res, next) {
   return res.status(403).json({ error: 'ต้องการสิทธิ์ Admin เท่านั้น' });
 }
 function tok(username) { return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '8h' }); }
+function tok24h(username) { return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '24h' }); }
 
 // ─── Server-side notification helper ─────────────────────────────────────────
 async function pushNotif(io, { type, toUsername, fromUsername, fromFullName, message, docId, docTitle }) {
@@ -251,6 +252,50 @@ app.post('/api/auth/passkey-only', async (req, res) => {
     }
     await auditLog('login_passkey_fail', 'unknown', null, {}, req.ip);
     return res.status(401).json({ error: 'Passkey ไม่ถูกต้อง' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Doc-preview deep link: passkey + access check → 24h token ───────────────
+app.post('/api/auth/doc-preview', async (req, res) => {
+  try {
+    const { passkey, docId } = req.body;
+    if (!passkey || !/^\d{6}$/.test(passkey)) return res.status(400).json({ error: 'Passkey ต้องเป็นตัวเลข 6 หลัก' });
+    if (!docId) return res.status(400).json({ error: 'ไม่ระบุ docId' });
+    // 1. Find user by passkey
+    const { rows: users } = await query('SELECT * FROM users WHERE passkey_hash IS NOT NULL');
+    let matchedUser = null;
+    for (const u of users) {
+      const ok = await bcrypt.compare(passkey, u.passkey_hash);
+      if (ok) { matchedUser = u; break; }
+    }
+    if (!matchedUser) {
+      await auditLog('doc_preview_passkey_fail', 'unknown', docId, {}, req.ip);
+      return res.status(401).json({ error: 'Passkey ไม่ถูกต้อง' });
+    }
+    // 2. Fetch doc
+    const { rows: docs } = await query('SELECT * FROM documents WHERE id=$1', [docId]);
+    if (!docs.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
+    const doc = docs[0];
+    // 3. Access check
+    const { rows: roleRows } = await query('SELECT permissions FROM roles WHERE id=$1', [matchedUser.role_id]);
+    const perms = roleRows[0]?.permissions || {};
+    const canAccess = matchedUser.role_id === 'admin' || perms.can_view_all ||
+      doc.sender_username === matchedUser.username ||
+      doc.recipient_username === matchedUser.username ||
+      (doc.recipient_type === 'department' && doc.recipient_department === matchedUser.department);
+    if (!canAccess) {
+      await auditLog('doc_preview_no_access', matchedUser.username, docId, {}, req.ip);
+      return res.status(403).json({ error: 'คุณไม่มีสิทธิ์ดูเอกสารนี้' });
+    }
+    await auditLog('doc_preview_ok', matchedUser.username, docId, {}, req.ip);
+    res.json({
+      token: tok24h(matchedUser.username),
+      username: matchedUser.username,
+      user: { username: matchedUser.username, fullName: matchedUser.full_name,
+              email: matchedUser.email, department: matchedUser.department,
+              location: matchedUser.location, role: matchedUser.role_id },
+      doc: fmtDoc(doc)
+    });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
