@@ -1492,10 +1492,27 @@ function navigate(page,params={}){
     case 'create':  initWizard(); break;
     case 'inbox':
       renderInbox(); // instant from cache
+      if (getDocs().length === 0) {
+        apiCall('GET','/api/docs/all-meta').then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            localStorage.setItem(K.docs, JSON.stringify(data));
+            renderInbox();
+          }
+        }).catch(()=>{});
+      }
       syncFromServer().then(()=>renderInbox()).catch(()=>{});
       break;
     case 'outbox':
       renderOutbox();
+      // If K.docs is empty, fetch directly — don't wait for full sync
+      if (getDocs().length === 0) {
+        apiCall('GET','/api/docs/all-meta').then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            localStorage.setItem(K.docs, JSON.stringify(data));
+            renderOutbox();
+          }
+        }).catch(()=>{});
+      }
       syncFromServer().then(()=>renderOutbox()).catch(()=>{});
       break;
     case 'profile': renderProfile(); break;
@@ -1540,6 +1557,10 @@ async function renderHome(){
 
   // ดึง ALL docs metadata จาก server (ทุก user เห็นทุก doc)
   const allMeta = await apiCall('GET','/api/docs/all-meta') || getDocs();
+  // Save to K.docs so outbox/inbox cache is always up-to-date
+  if (Array.isArray(allMeta) && allMeta.length > 0) {
+    localStorage.setItem(K.docs, JSON.stringify(allMeta));
+  }
   const totalDocs=allMeta.length;
 
   // ทุก user เห็นเอกสารทั้งหมด — แต่เปิด popup ได้เฉพาะที่เกี่ยวข้อง
