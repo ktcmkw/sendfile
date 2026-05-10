@@ -7,6 +7,12 @@ const jwt        = require('jsonwebtoken');
 const path       = require('path');
 const { initDB, query, auditLog } = require('./db');
 const nodemailer = require('nodemailer');
+const { v2: cloudinary } = require('cloudinary');
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 function getMailer() {
   if (!process.env.SMTP_HOST) return null;
   return nodemailer.createTransport({
@@ -98,6 +104,23 @@ const fmtNotif = n => ({
   createdAt: Number(n.created_at), read: n.read
 });
 
+
+// fmtDocMeta — metadata only, no base64, no full content (for /api/docs/all-meta)
+const fmtDocMeta = d => ({
+  id: d.id, title: d.title, contentType: d.content_type,
+  senderUsername: d.sender_username, senderFullName: d.sender_full_name,
+  senderDepartment: d.sender_department, senderLocation: d.sender_location,
+  recipientType: d.recipient_type, recipientUsername: d.recipient_username,
+  recipientDepartment: d.recipient_department, recipientFullName: d.recipient_full_name,
+  priority: d.priority,
+  attachments: (d.attachments || []).map(a => ({
+    name: a.name, type: a.type, size: a.size,
+    cloudinaryUrl: a.cloudinaryUrl || null, cloudinaryPublicId: a.cloudinaryPublicId || null
+  })),
+  createdAt: Number(d.created_at), status: d.status,
+  receivedAt: d.received_at ? Number(d.received_at) : null,
+  receivedBy: d.received_by, storageLocation: d.storage_location
+});
 // ═══════════════════════════════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════════════════════════════
@@ -259,6 +282,35 @@ app.get('/api/docs', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── All-docs metadata (no base64, for home log — visible to ALL users) ──────
+app.get('/api/docs/all-meta', auth, async (req, res) => {
+  try {
+    const { rows } = await query(
+      'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
+      'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
+      'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
+      'FROM documents ORDER BY created_at DESC'
+    );
+    res.json(rows.map(fmtDocMeta));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Cloudinary file upload ───────────────────────────────────────────────────
+app.post('/api/upload', auth, async (req, res) => {
+  try {
+    const { dataUri, fileName } = req.body;
+    if (!dataUri) return res.status(400).json({ error: 'ไม่พบข้อมูลไฟล์' });
+    if (!process.env.CLOUDINARY_CLOUD_NAME) return res.status(503).json({ error: 'Cloudinary ยังไม่ได้ตั้งค่า' });
+    const result = await cloudinary.uploader.upload(dataUri, {
+      resource_type: 'auto',
+      folder: 'sendfile',
+      public_id: 'sendfile_' + Date.now() + '_' + (fileName || 'file').replace(/[^a-zA-Z0-9._-]/g, '_'),
+      use_filename: false
+    });
+    res.json({ cloudinaryUrl: result.secure_url, cloudinaryPublicId: result.public_id });
+  } catch(e) { console.error('[Cloudinary upload]', e.message); res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/docs/:id', auth, async (req, res) => {
   try {
     const { rows } = await query('SELECT * FROM documents WHERE id=$1', [req.params.id]);
@@ -348,6 +400,14 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
     const docId = req.params.id;
     const { rows } = await query('SELECT id,title,attachments FROM documents WHERE id=$1', [docId]);
     if (!rows.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
+    // Delete Cloudinary files
+    const atts = rows[0].attachments || [];
+    for (const a of atts) {
+      if (a.cloudinaryPublicId) {
+        try { await cloudinary.uploader.destroy(a.cloudinaryPublicId, { resource_type: 'auto' }); }
+        catch(ce) { console.warn('[Cloudinary delete]', ce.message); }
+      }
+    }
     await query('DELETE FROM notifications WHERE doc_id=$1', [docId]);
     await query('DELETE FROM documents WHERE id=$1', [docId]);
     await auditLog('doc_delete', req.user.username, docId, { title: rows[0].title }, req.ip);
