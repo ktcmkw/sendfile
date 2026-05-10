@@ -437,6 +437,22 @@ function getDepartments(){
   return store.get(K.depts) || [];
 }
 
+// ── Force-fetch users directly if cache looks incomplete ─────────────────────
+// Called when admin panel shows fewer users than expected (e.g. only seeded user)
+let _usersFetchInProgress = false;
+async function ensureUsersLoaded(onDone) {
+  if (_usersFetchInProgress) return;
+  _usersFetchInProgress = true;
+  try {
+    const data = await apiCall('GET', '/api/users');
+    if (Array.isArray(data) && data.length > 0) {
+      localStorage.setItem(K.users, JSON.stringify(data));
+      if (onDone) onDone();
+    }
+  } catch(_) {}
+  finally { _usersFetchInProgress = false; }
+}
+
 // ── Ensure locations/departments are loaded before showing dropdowns ──────────
 // If cache is empty (sync not yet complete), fetch direct from API and re-render
 async function ensureLocsLoaded() {
@@ -1485,7 +1501,14 @@ function navigate(page,params={}){
     case 'profile': renderProfile(); break;
     case 'admin':
       renderAdmin(); // render cache immediately (no blank wait)
-      syncFromServer().then(()=>renderAdmin()).catch(()=>{}); // refresh in background
+      // Fetch fresh user list directly (not just sync) to avoid cold-start gaps
+      apiCall('GET', '/api/users').then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          localStorage.setItem(K.users, JSON.stringify(data));
+          if (adminTab === 'members') renderAdminTab('members');
+        }
+      }).catch(()=>{});
+      syncFromServer().then(()=>renderAdmin()).catch(()=>{});
       break;
     case 'notifs':
       renderNotifs();
@@ -2199,8 +2222,19 @@ function renderAdminTab(tab){
     // BUG6-fix: if user deleted or not found, fall back to empty state
     const _emptyState = `<div class="user-detail-panel admin-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg><p style="font-weight:700;font-size:14px;">เลือกสมาชิก</p><p style="font-size:12px;margin-top:4px;">คลิกชื่อทางซ้ายเพื่อดู/แก้ไขข้อมูล</p></div>`;
     const detailPanel = _rawDetail || _emptyState;
+    // If only 1 user (seeded admin) → auto-fetch fresh list in background
+    if (users.length <= 1) {
+      ensureUsersLoaded(() => renderAdminTab('members'));
+    }
     content=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <span style="color:var(--muted);font-size:13px;font-weight:500;">สมาชิกทั้งหมด <strong style="color:var(--text)">${users.length}</strong> คน</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="color:var(--muted);font-size:13px;font-weight:500;">สมาชิกทั้งหมด <strong style="color:var(--text)" id="members-count">${users.length}</strong> คน</span>
+        <button onclick="refreshMembersList()" id="members-refresh-btn" title="รีเฟรชรายชื่อ"
+          style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          รีเฟรช
+        </button>
+      </div>
       <button class="btn-primary btn-sm" onclick="openAddMemberModal()">+ เพิ่มสมาชิก</button>
     </div>
     <div class="admin-layout">
@@ -2557,6 +2591,24 @@ async function saveUserEdit(oldUsername){
   await syncFromServer();
   adminSelectedUser=newUsername!==oldUsername?newUsername:oldUsername;
   showToast('บันทึกข้อมูลเรียบร้อย ✓');
+  renderAdminTab('members');
+}
+
+async function refreshMembersList() {
+  const btn = document.getElementById('members-refresh-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> กำลังโหลด…'; }
+  try {
+    // Fetch users directly (bypass sync) for guaranteed fresh data
+    const data = await apiCall('GET', '/api/users');
+    if (Array.isArray(data) && data.length > 0) {
+      localStorage.setItem(K.users, JSON.stringify(data));
+      showToast(`โหลดสมาชิก ${data.length} คน ✓`);
+    }
+    // Also do a full sync in background
+    syncFromServer().catch(()=>{});
+  } catch(e) {
+    showToast('โหลดไม่สำเร็จ: ' + e.message, 'error');
+  }
   renderAdminTab('members');
 }
 

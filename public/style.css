@@ -1141,3 +1141,6 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   font-size: .72rem; color: var(--muted); font-weight: 600; text-transform: uppercase;
   letter-spacing: .04em;
 }
+
+/* ── Spin animation for loading buttons ── */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
