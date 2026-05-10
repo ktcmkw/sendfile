@@ -199,7 +199,10 @@ app.post('/api/auth/login', async (req, res) => {
     const ok = await bcrypt.compare(password, rows[0].password_hash);
     if (!ok) { await auditLog('login_fail', username, null, {}, req.ip); return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' }); }
     await auditLog('login', username, null, {}, req.ip);
-    res.json({ token: tok(username), username, role: rows[0].role_id });
+    const u = rows[0];
+    res.json({ token: tok(username), username, role: u.role_id,
+      user: { username: u.username, fullName: u.full_name, email: u.email,
+              department: u.department, location: u.location, role: u.role_id } });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

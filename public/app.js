@@ -1063,13 +1063,24 @@ async function handleLogin(){
   const loginBtn=document.querySelector('#form-login .btn-primary');
   if(loginBtn){loginBtn.disabled=true;loginBtn.textContent='กำลังเข้าสู่ระบบ...';}
   showAuthAlert('กำลังเข้าสู่ระบบ...','');
-  const res = await apiCall('POST','/api/auth/login',{username,password});
-  if(!res||res.error){ showAuthAlert(res?.error||'เข้าสู่ระบบไม่สำเร็จ','error'); if(loginBtn){loginBtn.disabled=false;loginBtn.textContent='เข้าสู่ระบบ';} return; }
+  // Raw fetch to capture exact server error message
+  let res, loginErr;
+  try {
+    const r = await fetch('/api/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username,password})
+    });
+    const data = await r.json();
+    if(!r.ok){ loginErr = data.error || 'เข้าสู่ระบบไม่สำเร็จ'; } else { res = data; }
+  } catch(e){ loginErr = 'เชื่อมต่อ server ไม่ได้'; }
+  if(loginBtn){loginBtn.disabled=false;loginBtn.textContent='เข้าสู่ระบบ';}
+  if(loginErr||!res){ showAuthAlert(loginErr||'เข้าสู่ระบบไม่สำเร็จ','error'); return; }
   _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
   showAuthAlert('กำลังโหลดข้อมูล...','');
   await syncFromServer();
-  const user = getUsers().find(u=>u.username===username);
-  if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
+  // Fallback: use user object from server response if sync/cache failed
+  const user = getUsers().find(u=>u.username===username) || res.user;
+  if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้ กรุณาลองใหม่อีกครั้ง','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
   connectSocket(username);
   enterDashboard(user);
@@ -1360,7 +1371,7 @@ function navigate(page,params={}){
     case 'inbox':   syncFromServer().then(()=>renderInbox()); break;
     case 'outbox':  syncFromServer().then(()=>renderOutbox()); break;
     case 'profile': renderProfile(); break;
-    case 'admin':   renderAdmin(); break;
+    case 'admin':   syncFromServer().then(()=>renderAdmin()); break;
     case 'notifs':  syncFromServer().then(()=>renderNotifs()); break;
     case 'qr':      renderQRViewer(params.docId); break;
   }
@@ -2424,11 +2435,24 @@ function confirmDeleteMember(username){
     `<button class="btn-outline" onclick="closeModal()">ยกเลิก</button><button class="btn-danger" onclick="deleteMember('${escapeHtml(username)}')">ลบบัญชี</button>`);
 }
 async function deleteMember(username){
-  const res=await apiCall('DELETE','/api/users/'+username);
-  if(!res||res.error){showToast(res?.error||'ลบไม่สำเร็จ','error');return;}
-  await syncFromServer(); closeModal();
+  // Raw fetch to get exact error message from server
+  let delRes, delErr;
+  try {
+    const r = await fetch('/api/users/'+username, {
+      method:'DELETE', headers:{'Authorization':'Bearer '+_jwt}
+    });
+    const data = await r.json();
+    if(!r.ok){ delErr = data.error || 'ลบไม่สำเร็จ'; } else { delRes = data; }
+  } catch(e){ delErr = 'เชื่อมต่อ server ไม่ได้'; }
+  if(delErr||!delRes){ showToast(delErr||'ลบไม่สำเร็จ','error'); return; }
+  // Instantly purge from local cache — do not wait for sync
+  store.set(K.users, getUsers().filter(u=>u.username!==username));
   if(adminSelectedUser===username) adminSelectedUser=null;
-  renderAdminTab('members'); showToast('ลบบัญชีแล้ว');
+  closeModal();
+  renderAdminTab('members');
+  showToast('ลบบัญชีแล้ว ✓');
+  // Background sync to confirm fresh data
+  syncFromServer().then(()=>renderAdminTab('members')).catch(()=>{});
 }
 async function addDept(){
   const name=(prompt('ชื่อแผนกใหม่:','')||'').trim();
