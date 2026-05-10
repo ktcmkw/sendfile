@@ -77,19 +77,19 @@ function showAuth() {
 
 // Socket.io — connect after DOM ready
 let _socket = null;
-// ── Polling fallback: sync every 3s (fast — /api/sync is 1 call now) ───────
+// ── Polling fallback: sync every 15s (Socket.io handles real-time; poll is safety net) ──
 let _pollInterval = null;
 function startPolling() {
   if (_pollInterval) clearInterval(_pollInterval);
   _pollInterval = setInterval(async () => {
     if (!getCurrentUser()) return;
-    await syncFromServer();
+    await syncFromServer();       // refresh data silently
     updateInboxBadge(); updateNotifBadge();
-    // quietly re-render pages that show live counts
-    if (['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
+    // Only re-render if socket is NOT connected (poll = sole data source)
+    if (!_socket?.connected && ['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
       navigate(currentPage);
     }
-  }, 3000); // every 3 seconds — fast polling fallback
+  }, 15000); // 15 seconds — socket.io handles instant updates; poll is fallback only
 }
 function stopPolling() { if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; } }
 
@@ -136,9 +136,11 @@ function connectSocket(username) {
 
     _socket.on('doc_update', async (data) => {
       if(data?.type==='deleted'){
-        // Instant local cache update — no server call needed
+        // Instant local cache update — no server round-trip needed
         const docs=getDocs().filter(d=>d.id!==data.docId);
         localStorage.setItem(K.docs,JSON.stringify(docs));
+        // Close preview if this doc was open
+        if(typeof adminSelectedDoc!=='undefined' && adminSelectedDoc===data.docId) adminSelectedDoc=null;
       } else if(data?.doc) {
         // Merge incoming doc directly into cache — instant UI update
         const docs=getDocs();
@@ -158,12 +160,28 @@ function connectSocket(username) {
         const notifs=getNotifs();
         if(!notifs.find(n=>n.id===notif.id)) notifs.unshift(notif);
         localStorage.setItem(K.notifs,JSON.stringify(notifs));
+        // Show popup alert for important notifications
+        showNotifPopup(notif);
       } else {
         await syncFromServer();
       }
       updateNotifBadge(); updateInboxBadge();
       const pages=['inbox','outbox','admin','home','notifs','profile'];
       if(pages.includes(currentPage)) navigate(currentPage);
+    });
+    // Handle clear_all doc event
+    _socket.on('doc_update', (data) => {
+      if(data?.type==='clear_all'){
+        localStorage.setItem(K.docs, JSON.stringify([]));
+        localStorage.setItem(K.notifs, JSON.stringify([]));
+        updateInboxBadge(); updateNotifBadge();
+        if(['inbox','outbox','admin','home','notifs'].includes(currentPage)) navigate(currentPage);
+      }
+    });
+    _socket.on('notifs_cleared', () => {
+      localStorage.setItem(K.notifs, JSON.stringify([]));
+      updateNotifBadge(); updateInboxBadge();
+      if(currentPage==='notifs') navigate('notifs');
     });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
@@ -186,6 +204,85 @@ function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,
 function formatDate(ts){ if(!ts)return'—'; const d=new Date(ts); return `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getFullYear()+543} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')} น.`; }
 function formatDateShort(ts){ if(!ts)return'—'; const d=new Date(ts); return `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}/${(d.getFullYear()+543).toString().slice(-2)}`; }
 function generateDocId(){ const docs=store.get(K.docs); const n=(docs.length+1).toString().padStart(4,'0'); return `DOC-${new Date().getFullYear()}-${n}`; }
+// ─── Notification popup (real-time alert) ─────────────────────────────────────
+function showNotifPopup(notif){
+  // Don't show popup for self-actions (sent_log, received_log)
+  const selfTypes=['doc_sent_log','doc_received_log'];
+  if(selfTypes.includes(notif.type)) return;
+  const icon=notifIcon(notif.type)||'🔔';
+  const label=notifTypeLabel(notif.type)||'แจ้งเตือน';
+  const existing=document.getElementById('notif-popup');
+  if(existing) existing.remove();
+  const pop=document.createElement('div');
+  pop.id='notif-popup';
+  pop.style.cssText=`position:fixed;bottom:80px;right:20px;z-index:9998;
+    background:var(--card);border:1px solid var(--border);border-radius:14px;
+    box-shadow:0 8px 32px rgba(0,0,0,0.4);padding:14px 18px;max-width:320px;min-width:240px;
+    animation:slideInRight .3s ease;cursor:pointer;`;
+  pop.innerHTML=`
+    <div style="display:flex;align-items:flex-start;gap:12px;">
+      <div style="font-size:22px;line-height:1;">${icon}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:700;color:var(--accent-light);margin-bottom:2px;">${label}</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.4;word-break:break-word;">${escapeHtml(notif.message||'')}</div>
+        ${notif.fromFullName?`<div style="font-size:11px;color:var(--muted);margin-top:4px;">จาก: ${escapeHtml(notif.fromFullName)}</div>`:''}
+      </div>
+      <div style="font-size:18px;color:var(--muted);padding-left:4px;line-height:1;" onclick="document.getElementById('notif-popup')?.remove()">×</div>
+    </div>`;
+  pop.onclick=(e)=>{ if(e.target.textContent==='×')return; navigate('notifs'); pop.remove(); };
+  document.body.appendChild(pop);
+  // Auto-dismiss after 6 seconds
+  setTimeout(()=>{ if(pop.parentNode){ pop.style.animation='slideOutRight .3s ease'; setTimeout(()=>pop.remove(),280); } },6000);
+}
+
+// ─── Admin: clear all data with passkey confirmation ────────────────────────
+function openClearDataModal(type){
+  const isDocs = type==='docs';
+  const title = isDocs ? '🗑 ล้างเอกสารทั้งหมด' : '📭 ล้างประวัติกล่องจดหมาย';
+  const warning = isDocs
+    ? 'เอกสารทุกฉบับในระบบ รวมถึงไฟล์แนบ จะถูกลบถาวร ไม่สามารถกู้คืนได้'
+    : 'ประวัติกล่องจดหมายของทุก User จะถูกล้าง';
+  openModal(title,`
+    <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:13px;color:#fca5a5;font-weight:600;">⚠️ คำเตือน</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px;">${warning}</div>
+    </div>
+    <div class="form-group">
+      <label>ยืนยันด้วย Passkey ของคุณ</label>
+      <input type="password" id="clear-passkey-input" inputmode="numeric" maxlength="6"
+        placeholder="กรอก Passkey 6 หลัก"
+        style="letter-spacing:0.3em;font-size:18px;text-align:center;"
+        onkeydown="if(event.key==='Enter')confirmClearData('${type}')">
+    </div>`,
+    `<button class="btn-outline" onclick="closeModal()">ยกเลิก</button>
+     <button class="btn-danger" onclick="confirmClearData('${type}')" style="background:var(--red);color:#fff;border:none;border-radius:var(--r);padding:8px 20px;cursor:pointer;font-weight:600;">🗑 ยืนยันลบ</button>`,
+    ()=>setTimeout(()=>document.getElementById('clear-passkey-input')?.focus(),100)
+  );
+}
+async function confirmClearData(type){
+  const passkey=(document.getElementById('clear-passkey-input')?.value||'').trim();
+  if(!passkey){showToast('กรุณากรอก Passkey','error');return;}
+  const btn=document.querySelector('#modal-footer .btn-danger');
+  if(btn){btn.disabled=true;btn.textContent='กำลังดำเนินการ...';}
+  const endpoint = type==='docs' ? '/api/admin/clear-docs' : '/api/admin/clear-notifs';
+  const res=await apiCall('POST', endpoint, {passkey});
+  if(btn){btn.disabled=false;btn.textContent='🗑 ยืนยันลบ';}
+  if(res?.ok){
+    closeModal();
+    showToast(type==='docs'?'ล้างเอกสารทั้งหมดแล้ว ✓':'ล้างกล่องจดหมายแล้ว ✓');
+    if(type==='docs'){
+      localStorage.setItem(K.docs, JSON.stringify([]));
+      localStorage.setItem(K.notifs, JSON.stringify([]));
+    } else {
+      localStorage.setItem(K.notifs, JSON.stringify([]));
+    }
+    updateInboxBadge(); updateNotifBadge();
+    if(['inbox','outbox','admin','home','notifs'].includes(currentPage)) navigate(currentPage);
+  } else {
+    showToast(res?.error||'ดำเนินการไม่สำเร็จ','error');
+  }
+}
+
 function showToast(msg,type='success'){
   const t=document.getElementById('toast'); t.textContent=msg; t.className=type; t.style.display='block';
   clearTimeout(window._toastTimer); window._toastTimer=setTimeout(()=>t.style.display='none',3000);
@@ -253,7 +350,7 @@ function getDepartments(){
 // ===================================================================
 const DEFAULT_ROLES=[
   {id:'user',name:'User',isDefault:true,permissions:{can_send:true,can_receive:true,can_view_all:false,can_manage_users:false,can_export:false,can_admin:false,can_preview_docs:false}},
-  {id:'admin',name:'Admin',isDefault:true,permissions:{can_send:true,can_receive:true,can_view_all:true,can_manage_users:true,can_export:true,can_admin:true,can_preview_docs:true}}
+  {id:'admin',name:'Admin',isDefault:true,permissions:{can_send:true,can_receive:true,can_view_all:true,can_manage_users:true,can_export:true,can_preview_docs:true}}
 ];
 function getRoles(){let r=store.get(K.roles);return(!r||r.length===0)?DEFAULT_ROLES:r;}
 function saveRoles(r){store.set(K.roles,r);}
@@ -265,10 +362,9 @@ function getRoleName(roleId){
 }
 function hasAdminAccess(u){
   if(!u) return false;
-  if(u.role==='admin') return true;
-  return getRoleById(u.role)?.permissions?.can_admin === true;
+  return u.role==='admin'; // Only built-in admin role
 }
-function permLabel(p){return{can_send:'ส่งเอกสาร',can_receive:'รับเอกสาร',can_view_all:'ดูเอกสารทั้งหมด',can_manage_users:'จัดการ User',can_export:'Export ข้อมูล',can_admin:'Admin Panel',can_preview_docs:'Preview เนื้อหาเอกสาร'}[p]||p;}
+function permLabel(p){return{can_send:'ส่งเอกสาร',can_receive:'รับเอกสาร',can_view_all:'ดูเอกสารทั้งหมด',can_manage_users:'จัดการ User',can_export:'Export ข้อมูล',can_preview_docs:'Preview เนื้อหาเอกสาร'}[p]||p;}
 
 // ===================================================================
 // GOOGLE DRIVE CONFIG
@@ -386,10 +482,14 @@ async function deleteDoc(id){
   if(r?.ok){
     showToast('ลบเอกสารเรียบร้อย');
     adminSelectedDoc=null;
-    await syncFromServer();
-    renderAdminTab('docs');
+    // Socket will push doc_update → cache update → re-render automatically
+    // Only do manual sync+render if socket is offline
+    if(!_socket?.connected){
+      await syncFromServer();
+      renderAdminTab('docs');
+    }
   } else {
-    showToast('ลบไม่สำเร็จ','error');
+    showToast(r?.error||'ลบไม่สำเร็จ — กรุณาลองใหม่','error');
   }
 }
 
@@ -571,29 +671,91 @@ async function markAllNotifsRead(){
 function notifIcon(type){return{admin_broadcast:'📢',doc_sent:'📨',doc_sent_log:'📤',doc_received:'✅',doc_received_log:'📥',doc_deleted:'🗑️',system:'ℹ️'}[type]||'🔔';}
 function notifTypeLabel(type){return{admin_broadcast:'ประกาศจาก Admin',doc_sent:'ได้รับเอกสารใหม่',doc_sent_log:'คุณส่งเอกสาร',doc_received:'ผู้รับยืนยันรับแล้ว',doc_received_log:'คุณรับเอกสาร',doc_deleted:'เอกสารถูกลบ',system:'แจ้งเตือนระบบ'}[type]||'แจ้งเตือน';}
 
+// Track which notif is currently open (email-style)
+let _openNotifId = null;
+
 function renderNotifs(){
   setPageTitle('กล่องจดหมาย','🔔');
-  const user=getCurrentUser();
-  const myNotifs=getMyNotifs(user.username);
-  markAllNotifsRead(); updateNotifBadge();
-  const isAdmin=hasAdminAccess(user);
-  const listHtml=myNotifs.length===0?'<div class="empty-state"><p>ยังไม่มีการแจ้งเตือน</p></div>':
-    '<div class="notif-list">'+myNotifs.map(n=>`
-    <div class="notif-item${n.read?' read':' unread-dot'}">
-      <div class="notif-icon-wrap">${notifIcon(n.type)}</div>
-      <div class="notif-body">
-        <div class="notif-type-label">${notifTypeLabel(n.type)}</div>
-        <div class="notif-message">${escapeHtml(n.message)}</div>
-        <div class="notif-time">${formatDate(n.createdAt)}${n.fromFullName?' · จาก: '+escapeHtml(n.fromFullName):''}</div>
+  const user = getCurrentUser();
+  const myNotifs = getMyNotifs(user.username);
+  const unreadCount = myNotifs.filter(n=>!n.read).length;
+  const isAdmin = hasAdminAccess(user);
+  // DO NOT auto-mark-all-read — only mark when user clicks
+
+  function notifRowHtml(n){
+    const isOpen = _openNotifId === n.id;
+    const readBadge = n.read
+      ? `<span class="notif-read-badge">✓ อ่านแล้ว</span>`
+      : `<span class="notif-unread-badge">● ใหม่</span>`;
+    const detailHtml = isOpen ? `
+      <div class="notif-detail-panel">
+        <div class="notif-detail-meta">
+          ${notifIcon(n.type)} <strong>${notifTypeLabel(n.type)}</strong>
+          <span style="margin-left:auto;font-size:11px;color:var(--muted);">${formatDate(n.createdAt)}</span>
+        </div>
+        ${n.fromFullName?`<div class="notif-detail-from">จาก: <strong>${escapeHtml(n.fromFullName)}</strong></div>`:''}
+        <div class="notif-detail-body">${escapeHtml(n.message)}</div>
+        ${n.docId?`<div style="margin-top:12px;"><button class="btn-primary btn-sm" onclick="event.stopPropagation();openDocPreviewModal('${n.docId}')">👁 ดูเอกสาร</button></div>`:''}
+      </div>` : '';
+    return `<div class="notif-item${n.read?' read':' unread'}${isOpen?' notif-open':''}" id="notif-row-${n.id}" onclick="openNotifItem('${n.id}')">
+      <div class="notif-row-top">
+        <div class="notif-icon-wrap">${notifIcon(n.type)}</div>
+        <div class="notif-body">
+          <div class="notif-row-header">
+            <span class="notif-type-label">${notifTypeLabel(n.type)}</span>
+            ${readBadge}
+          </div>
+          <div class="notif-message${n.read?'':' notif-message-bold'}">${escapeHtml(n.message)}</div>
+          <div class="notif-time">${formatDate(n.createdAt)}${n.fromFullName?' · '+escapeHtml(n.fromFullName):''}</div>
+        </div>
+        <div class="notif-chevron">${isOpen?'▲':'▼'}</div>
       </div>
-      ${n.docId?`<button class="btn-outline btn-sm" style="flex-shrink:0;" onclick="openDocPreviewModal('${n.docId}')">👁 ดู</button>`:''}
-    </div>`).join('')+'</div>';
+      ${detailHtml}
+    </div>`;
+  }
+
+  const listHtml = myNotifs.length===0
+    ? '<div class="empty-state"><p>ยังไม่มีการแจ้งเตือน</p></div>'
+    : `<div class="notif-list">${myNotifs.map(notifRowHtml).join('')}</div>`;
+
   document.getElementById('page-body').innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-      <span style="font-size:13px;color:var(--muted);">การแจ้งเตือน <strong style="color:var(--text)">${myNotifs.length}</strong> รายการ</span>
-      <div style="display:flex;gap:8px;">${isAdmin?'<button class="btn-primary btn-sm" onclick="openBroadcastModal()">📢 ส่งประกาศ</button>':''}
-      <button class="btn-outline btn-sm" onclick="renderNotifs()">🔄 รีเฟรช</button></div>
+      <span style="font-size:13px;color:var(--muted);">
+        ทั้งหมด <strong style="color:var(--text)">${myNotifs.length}</strong> รายการ
+        ${unreadCount>0?`· <strong style="color:var(--accent-light)">ยังไม่อ่าน ${unreadCount}</strong>`:''}
+      </span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${unreadCount>0?`<button class="btn-outline btn-sm" onclick="markAllAndRender()">✓ อ่านทั้งหมด</button>`:''}
+        ${isAdmin?'<button class="btn-primary btn-sm" onclick="openBroadcastModal()">📢 ส่งประกาศ</button>':''}
+      </div>
     </div>${listHtml}`;
+}
+
+async function openNotifItem(id){
+  const wasOpen = _openNotifId === id;
+  _openNotifId = wasOpen ? null : id;
+  // Mark as read in DB + local cache
+  if(!wasOpen){
+    const notifs = getNotifs();
+    const idx = notifs.findIndex(n=>n.id===id);
+    if(idx>=0 && !notifs[idx].read){
+      notifs[idx].read = true;
+      localStorage.setItem(K.notifs, JSON.stringify(notifs));
+      updateNotifBadge();
+      // Fire-and-forget API call
+      apiCall('PATCH', '/api/notifs/'+id+'/read').catch(()=>{});
+    }
+  }
+  renderNotifs();
+}
+
+async function markAllAndRender(){
+  const notifs = getNotifs();
+  notifs.forEach(n=>{ n.read=true; });
+  localStorage.setItem(K.notifs, JSON.stringify(notifs));
+  updateNotifBadge();
+  await apiCall('PATCH','/api/notifs/read-all');
+  renderNotifs();
 }
 
 function openBroadcastModal(){
@@ -838,7 +1000,7 @@ function getSession(){ return store.getObj(K.session); }
 function getCurrentUser(){ const s=getSession(); return s?findUser(s.username):null; }
 
 async function handleRegister(){
-  const username=document.getElementById('r-username').value.trim().toLowerCase();
+  const username=document.getElementById('r-username').value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
   const email=document.getElementById('r-email').value.trim();
   const fullName=document.getElementById('r-fullname').value.trim();
   const department=document.getElementById('r-dept').value.trim();
@@ -847,7 +1009,7 @@ async function handleRegister(){
   const confirm=document.getElementById('r-confirm').value;
   showAuthAlert('','');
   if(!username||!email||!fullName||!department||!location||!password){ showAuthAlert('กรุณากรอกข้อมูลให้ครบทุกช่อง','error'); return; }
-  if(username.length<3||username.length>32||!/^[a-z0-9_]+$/.test(username)){ showAuthAlert('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ตัวเลข 3-32 ตัว','error'); return; }
+  if(username.length<3||username.length>32||!/^[a-z0-9]+$/.test(username)){ showAuthAlert('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษและตัวเลขเท่านั้น (a-z, 0-9) ความยาว 3-32 ตัว','error'); return; }
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ showAuthAlert('รูปแบบอีเมลไม่ถูกต้อง','error'); return; }
   if(password.length<6){ showAuthAlert('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร','error'); return; }
   if(password!==confirm){ showAuthAlert('รหัสผ่านและยืนยันรหัสผ่านไม่ตรงกัน','error'); return; }
@@ -1939,7 +2101,7 @@ function renderAdminTab(tab){
     </div>`;
   } else if(tab==='roles'){
     const roles=getRoles();
-    const PERM_KEYS=['can_send','can_receive','can_view_all','can_manage_users','can_export','can_admin','can_preview_docs'];
+    const PERM_KEYS=['can_send','can_receive','can_view_all','can_manage_users','can_export','can_preview_docs'];
     const roleCardsHtml=roles.map(r=>`
       <div class="role-item">
         <div class="role-item-header">
@@ -2043,6 +2205,24 @@ function renderAdminTab(tab){
           <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">EMAIL_FROM</code> — ชื่อผู้ส่ง (เว้นว่างได้)<br>
         </div>
         <button class="btn-outline btn-sm" style="margin-top:10px;" onclick="checkEmailStatus()">🔄 ตรวจสอบสถานะ</button>
+      </div>
+    </div>
+    <div class="card-section" style="margin-bottom:16px;border-color:rgba(239,68,68,0.25);">
+      <div class="card-section-header" style="color:var(--red);">🗑 ล้างข้อมูลในระบบ</div>
+      <div class="card-section-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div style="background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.2);border-radius:10px;padding:14px;">
+            <div style="font-size:13px;font-weight:700;color:#fca5a5;margin-bottom:4px;">📄 ล้างเอกสารทั้งหมด</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">ลบเอกสารและไฟล์แนบทุกรายการในระบบ รวมถึงประวัติกล่องจดหมาย</div>
+            <button onclick="openClearDataModal('docs')" style="background:var(--red);color:#fff;border:none;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;width:100%;">🗑 ล้างเอกสาร</button>
+          </div>
+          <div style="background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.2);border-radius:10px;padding:14px;">
+            <div style="font-size:13px;font-weight:700;color:#fca5a5;margin-bottom:4px;">📭 ล้างกล่องจดหมาย</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">ล้างประวัติการแจ้งเตือนของทุก User โดยไม่ลบเอกสาร</div>
+            <button onclick="openClearDataModal('notifs')" style="background:rgba(239,68,68,0.7);color:#fff;border:none;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;width:100%;">📭 ล้างกล่องจดหมาย</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;">⚠️ ต้องยืนยันด้วย Passkey ทุกครั้ง — ข้อมูลที่ลบไม่สามารถกู้คืนได้</div>
       </div>
     </div>
     `;
@@ -2310,11 +2490,11 @@ async function checkEmailStatus(){
 }
 
 // ── Role CRUD ─────────────────────────────────────────────────
-const PERM_KEYS=['can_send','can_receive','can_view_all','can_manage_users','can_export','can_admin','can_preview_docs'];
+const PERM_KEYS=['can_send','can_receive','can_view_all','can_manage_users','can_export','can_preview_docs'];
 function openAddRoleModal(){ openAddRoleModalInner(null); }
 function openEditRoleModal(id){ const r=getRoleById(id); openAddRoleModalInner(r); }
 function openAddRoleModalInner(existing){
-  const r=existing||{id:'',name:'',isDefault:false,permissions:{can_send:true,can_receive:true,can_view_all:false,can_manage_users:false,can_export:false,can_admin:false}};
+  const r=existing||{id:'',name:'',isDefault:false,permissions:{can_send:true,can_receive:true,can_view_all:false,can_manage_users:false,can_export:false}};
   const permChecks=PERM_KEYS.map(p=>`<label class="perm-check"><input type="checkbox" id="perm-${p}" ${r.permissions[p]?'checked':''}>${permLabel(p)}</label>`).join('');
   openModal(existing?'แก้ไขบทบาท':'สร้างบทบาทใหม่',`
     <div class="form-group"><label>ชื่อบทบาท *</label><input type="text" id="new-role-name" value="${escapeHtml(r.name)}" placeholder="เช่น Manager, HR, Viewer"></div>

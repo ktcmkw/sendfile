@@ -58,6 +58,27 @@ app.use(express.json({ limit: '50mb' }));
 // Serve static: support both public/ folder and root index.html
 const fs = require('fs');
 const PUBLIC_DIR = fs.existsSync(path.join(__dirname,'public')) ? path.join(__dirname,'public') : __dirname;
+
+// Cache-busting version tag (changes every server restart)
+const BUILD_VER = Date.now();
+
+// HTML — no-cache so browser always fetches fresh version
+app.get(['/', '/index.html'], (req, res) => {
+  try {
+    let html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
+    html = html
+      .replace(/href="\/style\.css(\?v=[^"]*)?"/,  `href="/style.css?v=${BUILD_VER}"`)
+      .replace(/src="\/app\.js(\?v=[^"]*)?"/,      `src="/app.js?v=${BUILD_VER}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch(e) { res.status(500).send('Cannot load index.html'); }
+});
+
+// JS/CSS — 60s cache (short enough that redeploy is picked up quickly)
+app.use('/app.js',    (req, res, next) => { res.setHeader('Cache-Control', 'public, max-age=60'); next(); });
+app.use('/style.css', (req, res, next) => { res.setHeader('Cache-Control', 'public, max-age=60'); next(); });
+
 app.use(express.static(PUBLIC_DIR));
 app.use((req, res, next) => { req.io = io; next(); });
 
@@ -72,16 +93,10 @@ async function auth(req, res, next) {
     req.user = rows[0]; next();
   } catch { res.status(401).json({ error: 'Token หมดอายุ กรุณาเข้าสู่ระบบใหม่' }); }
 }
-async function admin(req, res, next) {
-  if (req.user.role_id === 'admin') return next(); // built-in admin always passes
-  try {
-    const { rows } = await query('SELECT permissions FROM roles WHERE id=$1', [req.user.role_id]);
-    const perms = rows[0]?.permissions || {};
-    if (!perms.can_admin) return res.status(403).json({ error: 'ต้องการสิทธิ์ Admin' });
-    next();
-  } catch(e) {
-    return res.status(403).json({ error: 'ตรวจสอบสิทธิ์ไม่สำเร็จ' });
-  }
+function admin(req, res, next) {
+  // Only the built-in 'admin' role can access Admin Panel
+  if (req.user.role_id === 'admin') return next();
+  return res.status(403).json({ error: 'ต้องการสิทธิ์ Admin เท่านั้น' });
 }
 function tok(username) { return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '8h' }); }
 
@@ -472,10 +487,15 @@ app.patch('/api/docs/:id/drive', auth, async (req, res) => {
 app.delete('/api/docs/:id', auth, admin, async (req, res) => {
   try {
     const docId = req.params.id;
-    const { rows } = await query('SELECT id,title,attachments FROM documents WHERE id=$1', [docId]);
+    // Fetch ALL needed fields BEFORE deleting (sender/recipient for notifications)
+    const { rows } = await query(
+      'SELECT id,title,attachments,sender_username,sender_full_name,recipient_username,recipient_type,recipient_department FROM documents WHERE id=$1',
+      [docId]
+    );
     if (!rows.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
+    const delDoc = rows[0];
     // Delete Cloudinary files
-    const atts = rows[0].attachments || [];
+    const atts = delDoc.attachments || [];
     for (const a of atts) {
       if (a.cloudinaryPublicId) {
         try { await cloudinary.uploader.destroy(a.cloudinaryPublicId, { resource_type: 'auto' }); }
@@ -484,25 +504,29 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
     }
     await query('DELETE FROM notifications WHERE doc_id=$1', [docId]);
     await query('DELETE FROM documents WHERE id=$1', [docId]);
-    await auditLog('doc_delete', req.user.username, docId, { title: rows[0].title }, req.ip);
+    await auditLog('doc_delete', req.user.username, docId, { title: delDoc.title }, req.ip);
+    // Emit delete event to all relevant rooms
     req.io.to('role:admin').emit('doc_update', { type: 'deleted', docId });
-    // Notify sender + recipient that doc was deleted
-    const delDoc = rows[0];
-    const { rows: docMeta } = await query('SELECT sender_username,sender_full_name,recipient_username,recipient_department,recipient_type,title FROM documents WHERE id=$1', [docId]).catch(()=>({rows:[]}));
-    // doc already deleted, use pre-fetched rows[0]
+    if (delDoc.sender_username) req.io.to(delDoc.sender_username).emit('doc_update', { type: 'deleted', docId });
+    if (delDoc.recipient_username) req.io.to(delDoc.recipient_username).emit('doc_update', { type: 'deleted', docId });
+    // Push notifications
     const dTitle = delDoc.title || docId;
-    const dSender = delDoc.sender_username;
     const actorName = req.user.full_name || req.user.username;
-    if (dSender) await pushNotif(req.io, { type:'doc_deleted', toUsername: dSender,
-      fromUsername: req.user.username, fromFullName: actorName, docId,
-      message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
-    if (delDoc.recipient_username && delDoc.recipient_username !== dSender) {
+    if (delDoc.sender_username) {
+      await pushNotif(req.io, { type:'doc_deleted', toUsername: delDoc.sender_username,
+        fromUsername: req.user.username, fromFullName: actorName, docId,
+        message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
+    }
+    if (delDoc.recipient_username && delDoc.recipient_username !== delDoc.sender_username) {
       await pushNotif(req.io, { type:'doc_deleted', toUsername: delDoc.recipient_username,
         fromUsername: req.user.username, fromFullName: actorName, docId,
         message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
     }
     res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+  } catch(e) {
+    console.error('[DELETE /api/docs/:id]', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Drive file IDs for expired docs (client uses these to delete from Drive) ─
@@ -633,6 +657,16 @@ app.patch('/api/notifs/read-all', auth, async (req, res) => {
     await query(
       `UPDATE notifications SET read=true WHERE (to_username=$1 OR to_username='__all__') AND read=false`,
       [req.user.username]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Mark single notification as read
+app.patch('/api/notifs/:id/read', auth, async (req, res) => {
+  try {
+    await query(
+      `UPDATE notifications SET read=true WHERE id=$1 AND (to_username=$2 OR to_username='__all__')`,
+      [req.params.id, req.user.username]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -768,6 +802,50 @@ app.get('/api/settings/audit-log', auth, admin, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Clear data (admin only, requires passkey) ───────────────────────────────
+app.post('/api/admin/clear-docs', auth, admin, async (req, res) => {
+  try {
+    const { passkey } = req.body || {};
+    if (!passkey) return res.status(400).json({ error: 'กรุณากรอก Passkey' });
+    const { rows: uRows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.user.username]);
+    const hash = uRows[0]?.passkey_hash;
+    if (!hash) return res.status(403).json({ error: 'ยังไม่ได้ตั้ง Passkey กรุณาตั้งก่อนใช้ฟีเจอร์นี้' });
+    const bcrypt = require('bcrypt');
+    const ok = await bcrypt.compare(passkey, hash);
+    if (!ok) return res.status(403).json({ error: 'Passkey ไม่ถูกต้อง' });
+    const { rows: allDocs } = await query('SELECT attachments FROM documents');
+    for (const doc of allDocs) {
+      for (const a of (doc.attachments || [])) {
+        if (a.cloudinaryPublicId) {
+          try { await cloudinary.uploader.destroy(a.cloudinaryPublicId, { resource_type: 'auto' }); } catch(_) {}
+        }
+      }
+    }
+    await query('DELETE FROM notifications');
+    await query('DELETE FROM documents');
+    await auditLog('clear_docs', req.user.username, null, {}, req.ip);
+    req.io.emit('doc_update', { type: 'clear_all' });
+    res.json({ ok: true });
+  } catch(e) { console.error('[clear-docs]', e); res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/clear-notifs', auth, admin, async (req, res) => {
+  try {
+    const { passkey } = req.body || {};
+    if (!passkey) return res.status(400).json({ error: 'กรุณากรอก Passkey' });
+    const { rows: uRows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.user.username]);
+    const hash = uRows[0]?.passkey_hash;
+    if (!hash) return res.status(403).json({ error: 'ยังไม่ได้ตั้ง Passkey กรุณาตั้งก่อนใช้ฟีเจอร์นี้' });
+    const bcrypt = require('bcrypt');
+    const ok = await bcrypt.compare(passkey, hash);
+    if (!ok) return res.status(403).json({ error: 'Passkey ไม่ถูกต้อง' });
+    await query('DELETE FROM notifications');
+    await auditLog('clear_notifs', req.user.username, null, {}, req.ip);
+    req.io.emit('notifs_cleared');
+    res.json({ ok: true });
+  } catch(e) { console.error('[clear-notifs]', e); res.status(500).json({ error: e.message }); }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // SOCKET.IO
 // ═══════════════════════════════════════════════════════════════════
@@ -779,13 +857,7 @@ io.on('connection', socket => {
     try {
       const { rows } = await query('SELECT department, role_id FROM users WHERE username=$1', [username]);
       if (rows[0]?.department) socket.join('dept:' + rows[0].department);
-      if (rows[0]?.role_id === 'admin') socket.join('role:admin');
-      // check can_admin permission for custom roles
-      if (rows[0]?.role_id && rows[0].role_id !== 'admin') {
-        const { rows: rr } = await query('SELECT permissions FROM roles WHERE id=$1', [rows[0].role_id]);
-        if (rr[0]?.permissions?.can_admin) socket.join('role:admin');
-      }
-    } catch(_) {}
+      if (rows[0]?.role_id === 'admin') socket.join('role:admin');    } catch(_) {}
   });
 });
 
