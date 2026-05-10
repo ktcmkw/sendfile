@@ -22,7 +22,8 @@ const BASE_URL = (()=>{
   return window.location.href.replace(/[?#].*$/, '').replace(/\/$/, '');
 })();
 const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
-const REMEMBER_KEY = 'sf_doc_session'; // 24h remembered doc-preview session
+const REMEMBER_KEY = 'sf_doc_session';     // 24h remembered doc-preview session
+const REMEMBER_AUTH_KEY = 'sf_remember_auth'; // 24h remember-me for regular login
 
 // ── 24h Doc-preview session helpers ─────────────────────────────
 function saveDocSession(token, username) {
@@ -45,6 +46,29 @@ function getDocSession() {
 }
 function clearDocSession() {
   localStorage.removeItem(REMEMBER_KEY);
+}
+
+// ── 24h Remember-me helpers (regular login) ──────────────────────
+function saveRememberAuth(token, username) {
+  try {
+    localStorage.setItem(REMEMBER_AUTH_KEY, JSON.stringify({
+      token, username,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000
+    }));
+  } catch(_) {}
+}
+function getRememberAuth() {
+  try {
+    const raw = localStorage.getItem(REMEMBER_AUTH_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || !s.token || !s.expiresAt) return null;
+    if (Date.now() > s.expiresAt) { localStorage.removeItem(REMEMBER_AUTH_KEY); return null; }
+    return s;
+  } catch(_) { return null; }
+}
+function clearRememberAuth() {
+  localStorage.removeItem(REMEMBER_AUTH_KEY);
 }
 
 // ── Cache Version Check ─────────────────────────────────────────
@@ -1109,6 +1133,7 @@ async function handleRegister(){
   // Build user from cache (may be richer after sync); fall back to seeded data
   const regUser = getUsers().find(u=>u.username===username) || regUserData;
   store.setObj(K.session,{username:regUser.username,loginAt:Date.now()});
+  saveRememberAuth(_jwt, regUser.username); // remember this device for 24h
   connectSocket(username);
   enterDashboard(regUser);
   // Show passkey setup modal after dashboard loads
@@ -1144,6 +1169,7 @@ async function handleLogin(){
   const user = getUsers().find(u=>u.username===username) || res.user;
   if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้ กรุณาลองใหม่อีกครั้ง','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
+  saveRememberAuth(_jwt, user.username); // remember this device for 24h
   connectSocket(username);
   enterDashboard(user);
 }
@@ -1199,6 +1225,7 @@ async function handlePasskeyLogin(){
   const user = getUsers().find(u=>u.username===res.username) || res.user;
   if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
+  saveRememberAuth(_jwt, user.username); // remember this device for 24h
   connectSocket(res.username);
   enterDashboard(user);
 }
@@ -1206,6 +1233,7 @@ async function handlePasskeyLogin(){
 function handleLogout(){
   stopPolling();
   clearDocSession();
+  clearRememberAuth();
   _jwt=null; sessionStorage.removeItem(_JWT_KEY);
   if(_socket){ _socket.disconnect(); _socket=null; }
   localStorage.removeItem(K.session);
@@ -3097,10 +3125,14 @@ async function handleDocPreviewPasskey(docId) {
 
     // Show document in preview modal then close → go to main app
     showDocPreviewModal(data.doc, () => {
-      // After user closes preview, clean URL and load app normally
+      // After user closes preview, clean URL and enter dashboard
       window.history.replaceState(null, '', window.location.pathname);
-      syncFromServer();
-      showMain();
+      (async () => {
+        try { await syncFromServer(); } catch(_) {}
+        const user = getCurrentUser();
+        if (user) { connectSocket(user.username); enterDashboard(user); }
+        else showAuth();
+      })();
     });
 
   } catch(e) {
@@ -3177,23 +3209,37 @@ function showDocPreviewModal(doc, onClose) {
 // ===================================================================
 // INIT — runs on page load
 // ===================================================================
+// Helper: restore a saved token and enter dashboard (used by initApp)
+async function restoreSession(token, username, afterEnter) {
+  _jwt = token;
+  sessionStorage.setItem(_JWT_KEY, _jwt);
+  // Ensure session object exists so getCurrentUser() works
+  if (!store.getObj(K.session)) {
+    store.setObj(K.session, { username, loginAt: Date.now() });
+  }
+  // Try to sync; even if it fails, seedCurrentUser from K.users is enough
+  try { await syncFromServer(); } catch(_) {}
+  const user = getCurrentUser();
+  if (!user) {
+    // Sync failed and no cached user — back to auth
+    _jwt = null; sessionStorage.removeItem(_JWT_KEY);
+    showAuth(); return;
+  }
+  connectSocket(username);
+  enterDashboard(user);
+  if (afterEnter) setTimeout(afterEnter, 600);
+}
+
 (function initApp() {
   const params = new URLSearchParams(window.location.search);
   const docIdParam = params.get('doc');
 
   if (docIdParam) {
     // ── Deep link mode: ?doc=DOC-XXXX ─────────────────────────────
-    // Check if there's a valid remembered 24h session for this device
-    const remembered = getDocSession();
-    if (remembered && remembered.token) {
-      // Restore JWT from remembered session and try to load the doc directly
-      _jwt = remembered.token;
-      sessionStorage.setItem(_JWT_KEY, _jwt);
-      // Show the app shell, then open the doc
-      syncFromServer();
-      showMain();
-      // Give the app a moment to render, then open the doc preview
-      setTimeout(async () => {
+    const docSess = getDocSession();
+    if (docSess && docSess.token) {
+      // Remembered 24h doc session — restore and open doc directly
+      restoreSession(docSess.token, docSess.username, async () => {
         try {
           const res = await apiCall('GET', '/api/docs/' + encodeURIComponent(docIdParam));
           if (res) {
@@ -3201,37 +3247,37 @@ function showDocPreviewModal(doc, onClose) {
               window.history.replaceState(null, '', window.location.pathname);
             });
           } else {
-            // Token may have expired — show passkey screen again
+            // Token expired/invalid — re-prompt passkey
             clearDocSession();
-            _jwt = null;
-            sessionStorage.removeItem(_JWT_KEY);
+            _jwt = null; sessionStorage.removeItem(_JWT_KEY);
             showDocPreviewScreen(docIdParam);
           }
-        } catch(_) {
-          showDocPreviewScreen(docIdParam);
-        }
-      }, 800);
+        } catch(_) { showDocPreviewScreen(docIdParam); }
+      });
     } else {
-      // No remembered session — show passkey screen immediately
-      // Show minimal app shell first so background renders correctly
-      document.body.style.opacity = '0';
-      setTimeout(() => {
-        document.body.style.opacity = '1';
-        showDocPreviewScreen(docIdParam);
-      }, 100);
+      // No remembered session → show passkey screen
+      showDocPreviewScreen(docIdParam);
     }
   } else {
     // ── Normal mode: no ?doc= param ───────────────────────────────
-    // Check if there's a valid 24h remembered session (non-doc-specific auto-login)
-    const jwt_stored = sessionStorage.getItem(_JWT_KEY);
-    if (jwt_stored) {
-      _jwt = jwt_stored;
-      // Already logged in (session still alive) — go straight to app
-      syncFromServer();
-      showMain();
+    const jwtStored = sessionStorage.getItem(_JWT_KEY);
+    if (jwtStored) {
+      // Active session in this tab — restore immediately
+      _jwt = jwtStored;
+      (async () => {
+        try { await syncFromServer(); } catch(_) {}
+        const user = getCurrentUser();
+        if (user) { connectSocket(user.username); enterDashboard(user); }
+        else { _jwt = null; sessionStorage.removeItem(_JWT_KEY); showAuth(); }
+      })();
     } else {
-      // No session — show auth screen
-      showAuth();
+      // No tab session — check 24h remember-me
+      const rem = getRememberAuth();
+      if (rem && rem.token) {
+        restoreSession(rem.token, rem.username, null);
+      } else {
+        showAuth();
+      }
     }
   }
 })();
