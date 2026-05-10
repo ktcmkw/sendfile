@@ -1972,19 +1972,19 @@ function renderInbox(){
   const syncAgo = _lastSyncTime ? Math.round((Date.now()-_lastSyncTime)/1000) : null;
   const syncLabel = syncAgo===null?'ยังไม่ได้ซิงค์':syncAgo<5?'เพิ่งอัพเดท':`${syncAgo} วิที่แล้ว`;
   document.getElementById('page-body').innerHTML=`
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;flex-wrap:wrap;gap:6px;">
-    <div class="filter-bar" style="margin-bottom:0;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+    <div class="filter-bar" style="margin-bottom:0;flex:1;min-width:0;">
       <span class="filter-chip${inboxFilter==='all'?' active':''}" onclick="inboxFilter='all';renderInbox()">ทั้งหมด (${docs.length})</span>
       <span class="filter-chip${inboxFilter==='pending'?' active':''}" onclick="inboxFilter='pending';renderInbox()">รอรับ (${pCount})</span>
       <span class="filter-chip${inboxFilter==='received'?' active':''}" onclick="inboxFilter='received';renderInbox()">รับแล้ว (${rCount})</span>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span id="inbox-sync-label" style="font-size:11px;color:var(--muted);">🔄 ${syncLabel}</span>
-      <button onclick="forceRefreshInbox()" title="รีเฟรช" style="background:none;border:1px solid var(--border);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;">
-        <svg id="inbox-refresh-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-        รีเฟรช
-      </button>
-    </div>
+    <button onclick="forceRefreshInbox()" id="inbox-refresh-btn"
+      style="display:flex;align-items:center;gap:6px;padding:6px 14px;border:1.5px solid var(--blue);border-radius:20px;background:var(--white);color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;flex-shrink:0;">
+      <svg id="inbox-refresh-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+      </svg>
+      <span id="inbox-sync-label">🔄 ${syncLabel}</span>
+    </button>
   </div>
   <div class="doc-list">
   ${filtered.length===0?'<div class="empty-state"><p>ไม่มีเอกสาร</p></div>':
