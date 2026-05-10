@@ -138,8 +138,15 @@ app.post('/api/auth/passkey-setup', auth, async (req, res) => {
   try {
     const { passkey } = req.body;
     if (!passkey || !/^\d{6}$/.test(passkey)) return res.status(400).json({ error: 'Passkey ต้องเป็นตัวเลข 6 หลัก' });
+    // Check duplicate: compare against all other users' passkeys
+    const { rows: others } = await query('SELECT passkey_hash FROM users WHERE passkey_hash IS NOT NULL AND username!=$1', [req.user.username]);
+    for (const u of others) {
+      const dup = await bcrypt.compare(passkey, u.passkey_hash);
+      if (dup) return res.status(409).json({ error: 'Passkey นี้ถูกใช้โดย User อื่นแล้ว กรุณาเลือก 6 หลักใหม่' });
+    }
     const hash = await bcrypt.hash(passkey, 10);
     await query('UPDATE users SET passkey_hash=$1 WHERE username=$2', [hash, req.user.username]);
+    await auditLog('passkey_set', req.user.username, null, {}, req.ip);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

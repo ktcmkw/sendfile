@@ -64,6 +64,7 @@ function showAuth() {
   localStorage.removeItem(K.session);
   document.getElementById('dashboard').style.display='none';
   document.getElementById('auth-screen').style.display='flex';
+  const _mbnav=document.getElementById('mobile-bottom-nav');if(_mbnav)_mbnav.style.display='none';
   switchTab('login');
 }
 
@@ -702,6 +703,7 @@ function handleLogout(){
   localStorage.removeItem(K.session);
   document.getElementById('dashboard').style.display='none';
   document.getElementById('auth-screen').style.display='flex';
+  const _mbn=document.getElementById('mobile-bottom-nav');if(_mbn)_mbn.style.display='none';
   switchTab('login');
 }
 
@@ -855,6 +857,7 @@ function updateNotifBadge(){
 function enterDashboard(user){
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('dashboard').style.display='flex';
+  const mbnav=document.getElementById('mobile-bottom-nav');if(mbnav)mbnav.style.display='flex';
   const initials=(user.fullName||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   document.getElementById('sb-user-info').innerHTML=`
     <div class="sb-avatar">${initials}</div>
@@ -914,17 +917,57 @@ function setPageTitle(title,icon=''){
 function renderHome(){
   setPageTitle('หน้าหลัก','🏠');
   const user=getCurrentUser();
+  const isAdmin=user.role==='admin';
   const allDocs=getDocs();
   const inbox=getInboxDocs(user);
   const outbox=getOutboxDocs(user);
   const pending=inbox.filter(d=>d.status==='pending').length;
   const sentThisMonth=outbox.filter(d=>{ const dm=new Date(d.createdAt); const now=new Date(); return dm.getMonth()===now.getMonth()&&dm.getFullYear()===now.getFullYear(); }).length;
-  const recent=[...inbox,...outbox].sort((a,b)=>b.createdAt-a.createdAt).slice(0,5);
   const canPreview=canPreviewDocs(user);
   const cs=canPreview?'clickable':'';
   const totalUsers=getUsers().length;
   const totalDocs=allDocs.length;
   const sa=(type)=>canPreview?`onclick="openStatModal('${type}')" title="คลิกเพื่อดูรายละเอียด"`:' ';
+
+  // ทุก user เห็นเอกสารทั้งหมด — แต่เปิด popup ได้เฉพาะที่เกี่ยวข้อง
+  const logDocs = [...allDocs].sort((a,b)=>b.createdAt-a.createdAt);
+
+  // เช็คว่า user มีสิทธิ์ดูเอกสารนั้นไหม
+  function canViewDoc(doc){
+    if(isAdmin) return true;
+    return doc.senderUsername===user.username ||
+           doc.recipientUsername===user.username ||
+           (doc.recipientType==='department'&&doc.recipientDepartment===user.department);
+  }
+
+  const adminCols = '<th style="width:40px;"></th>';
+
+  const rowsHtml = logDocs.length===0
+    ? '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">ยังไม่มีเอกสาร</td></tr>'
+    : logDocs.map(doc=>{
+        const allowed = canViewDoc(doc);
+        const searchStr = (doc.title+' '+doc.senderFullName+' '+doc.senderDepartment+' '+(doc.recipientFullName||doc.recipientDepartment||'')+' '+(doc.storageLocation||'')).toLowerCase();
+        const attChip = doc.attachments?.length ? `<span class="att-chip" style="margin-left:4px;">📎${doc.attachments.length}</span>` : '';
+        const storageCell = doc.storageLocation ? `📦 ${escapeHtml(doc.storageLocation)}` : '<span style="color:var(--muted);">—</span>';
+        const priorityBadge2 = doc.priority==='urgent' ? '<span class="badge" style="background:rgba(239,68,68,.1);color:var(--red);font-size:10px;margin-left:3px;">ด่วน</span>' : '';
+        // ปุ่ม 👁 แสดงเฉพาะที่มีสิทธิ์
+        const actionCell = allowed
+          ? `<td onclick="event.stopPropagation();"><button class="btn-icon" title="ดูเนื้อหา" onclick="openDocPreviewModal('${doc.id}')">👁</button></td>`
+          : `<td><span title="ไม่มีสิทธิ์ดูเอกสารนี้" style="color:var(--border);font-size:14px;">🔒</span></td>`;
+        // คลิกแถวได้เฉพาะที่มีสิทธิ์
+        const rowClick = allowed ? `onclick="openDocPreviewModal('${doc.id}')" style="cursor:pointer;"` : `style="opacity:0.7;"`;
+        const rowClass = allowed ? 'log-row-home log-row-clickable' : 'log-row-home';
+        return `<tr class="${rowClass}" ${rowClick} data-search="${searchStr}">
+          <td><span style="font-weight:600;font-size:13px;">${escapeHtml(doc.title)}</span>${attChip}</td>
+          <td>${escapeHtml(doc.senderFullName)}<br><span style="font-size:11px;color:var(--muted);">${escapeHtml(doc.senderDepartment||'')}${doc.senderLocation?' · '+escapeHtml(doc.senderLocation):''}</span></td>
+          <td>${escapeHtml(doc.recipientFullName||doc.recipientDepartment||'—')}</td>
+          <td>${doc.status==='received'?'<span class="badge badge-received">รับแล้ว</span>':'<span class="badge badge-pending">รอรับ</span>'}${priorityBadge2}</td>
+          <td style="font-size:12px;">${storageCell}</td>
+          <td style="font-size:12px;white-space:nowrap;">${formatDate(doc.createdAt)}</td>
+          ${actionCell}
+        </tr>`;
+      }).join('');
+
   document.getElementById('page-body').innerHTML=`
   <div class="stats-grid">
     <div class="stat-card c-blue ${cs}" ${sa('members')}>
@@ -944,25 +987,37 @@ function renderHome(){
       <div class="stat-label">เอกสารทั้งหมด${canPreview?'<span style="font-size:9px;opacity:.55;margin-left:4px;">▶</span>':''}</div>
     </div>
   </div>
-  <div class="card-section">
-    <div class="card-section-header">กิจกรรมล่าสุด <button class="btn-outline btn-sm" onclick="navigate('create')">+ สร้างเอกสาร</button></div>
-    <div class="card-section-body">
-      ${recent.length===0?'<div class="empty-state"><p>ยังไม่มีเอกสาร</p><p style="font-size:12px;margin-top:6px;">กด "สร้างเอกสาร" เพื่อเริ่มต้น</p></div>':
-        '<div class="doc-list">'+recent.map(doc=>{
-          const isInbox=doc.recipientUsername===user.username||doc.recipientDepartment===user.department;
-          const iconCls=doc.status==='received'?'ok':doc.priority==='very_urgent'?'warn':'';
-          const pvBtn=canPreview?`<button class="btn-outline btn-sm" style="flex-shrink:0;white-space:nowrap;" onclick="event.stopPropagation();openDocPreviewModal('${doc.id}')">👁 ดูเนื้อหา</button>`:'';
-          return `<div class="doc-card${doc.priority==='very_urgent'&&doc.status==='pending'?' urgent':''}">
-            <div class="doc-icon ${iconCls}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg></div>
-            <div class="doc-info"><div class="doc-title">${escapeHtml(doc.title)}</div>
-              <div class="doc-meta">${isInbox?'จาก: '+escapeHtml(doc.senderFullName):'ถึง: '+escapeHtml(doc.recipientFullName||doc.recipientDepartment||'')} · ${formatDateShort(doc.createdAt)}</div></div>
-            ${doc.status==='received'?'<span class="badge badge-received">รับแล้ว</span>':'<span class="badge badge-pending">รอรับ</span>'}
-            ${pvBtn}
-          </div>`;
-        }).join('')+'</div>'
-      }
+  <div class="card-section" style="margin-top:18px;">
+    <div class="card-section-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span>📋 Log การส่งเอกสาร <span style="font-size:12px;color:var(--muted);font-weight:400;">(${logDocs.length} รายการ)</span></span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="text" id="home-log-search" placeholder="🔍 ค้นหา..." oninput="filterHomeLog(this.value)"
+          style="padding:5px 10px;border:1px solid var(--border);border-radius:var(--r);font-size:12px;background:var(--white);color:var(--text);width:150px;">
+        <button class="btn-outline btn-sm" onclick="navigate('create')">+ สร้างเอกสาร</button>
+      </div>
     </div>
+    <div style="overflow-x:auto;">
+      <table class="data-table" id="home-log-table">
+        <thead><tr>
+          <th>ชื่อเอกสาร</th>
+          <th>ผู้ส่ง / แผนก</th>
+          <th>ผู้รับ</th>
+          <th>สถานะ</th>
+          <th>เก็บที่</th>
+          <th>วันที่ส่ง</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="home-log-body">${rowsHtml}</tbody>
+      </table>
+    </div>
+    ${!isAdmin?'<div style="font-size:11px;color:var(--muted);padding:8px 12px;">🔒 = เอกสารที่ไม่เกี่ยวข้องกับคุณ ไม่สามารถเปิดดูได้</div>':''}
   </div>`;
+}
+
+function filterHomeLog(q){
+  const rows=document.querySelectorAll('#home-log-body tr.log-row-home');
+  const lq=q.toLowerCase().trim();
+  rows.forEach(r=>{ r.style.display=(!lq||r.dataset.search?.includes(lq))?'':'none'; });
 }
 
 // ===================================================================
@@ -1116,30 +1171,8 @@ async function wzSubmit(){
     recipientType='department'; recipientDepartment=wz.recipient.slice(5);
     recipientFullName=recipientDepartment+' (ทั้งแผนก)';
   }
-  // ── Upload attachments to Google Drive if configured ──────────────
-  let finalAttachments=[...wzAttachments];
-  const cfg=getGDriveConfig();
-  if(cfg.enabled&&cfg.clientId&&wzAttachments.length>0){
-    try{
-      showToast('📤 กำลัง upload ไฟล์ขึ้น Google Drive...');
-      const token=await getDriveToken(cfg.clientId);
-      const uploaded=[];
-      for(const att of wzAttachments){
-        const result=await uploadFileToDrive(att,token,cfg);
-        if(result){
-          // Store Drive reference, discard base64 to save DB space
-          uploaded.push({name:att.name,type:att.type,size:att.size,driveId:result.id,driveUrl:result.webViewLink});
-        } else {
-          uploaded.push(att); // fallback: keep base64
-        }
-      }
-      finalAttachments=uploaded;
-      showToast('✅ Upload ไฟล์แนบขึ้น Drive เรียบร้อย');
-    }catch(e){
-      showToast('Drive upload ไม่สำเร็จ — บันทึกใน server แทน','error');
-      // finalAttachments remains base64
-    }
-  }
+  // ── ไฟล์แนบเก็บใน server (base64) เสมอ — Drive upload เป็น option ทีหลังใน QR Viewer ──
+  const finalAttachments=[...wzAttachments];
   const docContent = wz.mode==='form'
     ? {blocks:wz.blocks}
     : {tableHeading:wz.tableHeading,columns:wz.columns,rows:wz.rows};

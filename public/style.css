@@ -776,8 +776,27 @@ button:disabled{opacity:.5;cursor:not-allowed;}
    MOBILE IMPROVEMENTS (max-width: 768px)
 ═══════════════════════════════════════════════ */
 @media(max-width:768px){
-  .auth-card{margin:0;border-radius:var(--r-xl) var(--r-xl) 0 0;max-width:100%;min-height:auto;}
-  #auth-screen{align-items:flex-end;padding:0;}
+  #auth-screen {
+    align-items: flex-end;
+    background: linear-gradient(160deg, #3730a3 0%, #1e1b4b 40%, #0f0f1a 100%);
+    min-height: 100dvh;
+    padding: 0;
+  }
+  .auth-card {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 24px 24px 0 0;
+    margin: 0;
+    padding: 28px 20px 32px;
+    max-height: 90dvh;
+    overflow-y: auto;
+    box-shadow: 0 -8px 40px rgba(0,0,0,0.3);
+    min-height: auto;
+  }
+  .auth-logo { padding: 8px 0 12px; }
+  .auth-logo h1 { font-size: 22px; }
+  .auth-logo p { font-size: 12px; }
+  .auth-logo-icon { font-size: 36px; }
   .page-body{padding-bottom:100px;}
   .stat-card,.card-section,.doc-card{width:100%;}
 }
@@ -800,6 +819,11 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 .pin-digit::-webkit-outer-spin-button,.pin-digit::-webkit-inner-spin-button{-webkit-appearance:none;}
 .pin-digit:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(99,102,241,.18);}
 .pin-digit.filled{border-color:var(--blue);background:var(--blue-lt);}
+
+@media(max-width:480px){
+  .pin-row { gap: 6px; }
+  .pin-digit { width: 42px; height: 52px; font-size: 20px; border-radius: 10px; }
+}
 
 .auth-divider{display:flex;align-items:center;gap:10px;margin:14px 0 10px;}
 .auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border);}
