@@ -506,9 +506,8 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
     await query('DELETE FROM documents WHERE id=$1', [docId]);
     await auditLog('doc_delete', req.user.username, docId, { title: delDoc.title }, req.ip);
     // Emit delete event to all relevant rooms
-    req.io.to('role:admin').emit('doc_update', { type: 'deleted', docId });
-    if (delDoc.sender_username) req.io.to(delDoc.sender_username).emit('doc_update', { type: 'deleted', docId });
-    if (delDoc.recipient_username) req.io.to(delDoc.recipient_username).emit('doc_update', { type: 'deleted', docId });
+    req.io.emit('doc_update', { type: 'deleted', docId }); // broadcast to ALL — ensures every client's cache is cleared
+    req.io.emit('force_sync'); // fallback: disconnected clients will re-fetch on reconnect
     // Push notifications
     const dTitle = delDoc.title || docId;
     const actorName = req.user.full_name || req.user.username;

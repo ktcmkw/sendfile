@@ -137,9 +137,9 @@ function connectSocket(username) {
     _socket.on('doc_update', async (data) => {
       if(data?.type==='deleted'){
         // Instant local cache update — no server round-trip needed
-        const docs=getDocs().filter(d=>d.id!==data.docId);
+        const docs=getDocs().filter(d=>String(d.id)!==String(data.docId));
         localStorage.setItem(K.docs,JSON.stringify(docs));
-        if(typeof adminSelectedDoc!=='undefined' && adminSelectedDoc===data.docId) adminSelectedDoc=null;
+        if(typeof adminSelectedDoc!=='undefined' && String(adminSelectedDoc)===String(data.docId)) adminSelectedDoc=null;
       } else if(data?.type==='clear_all'){
         localStorage.setItem(K.docs, JSON.stringify([]));
         localStorage.setItem(K.notifs, JSON.stringify([]));
