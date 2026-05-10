@@ -72,9 +72,16 @@ async function auth(req, res, next) {
     req.user = rows[0]; next();
   } catch { res.status(401).json({ error: 'Token หมดอายุ กรุณาเข้าสู่ระบบใหม่' }); }
 }
-function admin(req, res, next) {
-  if (req.user.role_id !== 'admin') return res.status(403).json({ error: 'ต้องการสิทธิ์ Admin' });
-  next();
+async function admin(req, res, next) {
+  if (req.user.role_id === 'admin') return next(); // built-in admin always passes
+  try {
+    const { rows } = await query('SELECT permissions FROM roles WHERE id=$1', [req.user.role_id]);
+    const perms = rows[0]?.permissions || {};
+    if (!perms.can_admin) return res.status(403).json({ error: 'ต้องการสิทธิ์ Admin' });
+    next();
+  } catch(e) {
+    return res.status(403).json({ error: 'ตรวจสอบสิทธิ์ไม่สำเร็จ' });
+  }
 }
 function tok(username) { return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '8h' }); }
 

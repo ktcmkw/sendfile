@@ -78,7 +78,7 @@ function showAuth() {
 
 // Socket.io — connect after DOM ready
 let _socket = null;
-// ── Polling fallback: sync every 30s to catch missed socket events ──────────
+// ── Polling fallback: sync every 8s to catch missed socket events ──────────
 let _pollInterval = null;
 function startPolling() {
   if (_pollInterval) clearInterval(_pollInterval);
@@ -90,16 +90,51 @@ function startPolling() {
     if (['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
       navigate(currentPage);
     }
-  }, 30000); // every 30 seconds
+  }, 8000); // every 8 seconds
 }
 function stopPolling() { if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; } }
+
+// ── Page Visibility: sync immediately when user returns to tab ───────────────
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && getCurrentUser()) {
+    await syncFromServer();
+    updateInboxBadge(); updateNotifBadge();
+    if (['inbox','outbox','home','notifs','admin'].includes(currentPage)) {
+      navigate(currentPage);
+    }
+  }
+});
 
 function connectSocket(username) {
   if (typeof io === 'undefined') return; // socket.io ยังไม่โหลด — ใช้ polling แทน
   if (_socket) _socket.disconnect();
   try {
-    _socket = io({ transports: ['websocket','polling'] });
+    _socket = io({
+      transports: ['websocket','polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: Infinity,
+      timeout: 10000
+    });
+
+    // join room immediately and re-join after any reconnect
     _socket.emit('join', username);
+    _socket.on('connect', () => {
+      console.log('[socket] connected, joining room:', username);
+      _socket.emit('join', username);
+    });
+    _socket.on('reconnect', async (attempt) => {
+      console.log('[socket] reconnected after', attempt, 'attempts');
+      _socket.emit('join', username);
+      await syncFromServer(); updateInboxBadge(); updateNotifBadge();
+      if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
+        navigate(currentPage);
+    });
+    _socket.on('disconnect', (reason) => {
+      console.warn('[socket] disconnected:', reason);
+    });
+
     _socket.on('doc_update', async (data) => {
       if(data?.type==='deleted'){
         // Remove deleted doc from local cache immediately
@@ -169,6 +204,20 @@ function toggleMobileSidebar(){
   ov.classList.toggle('open');
 }
 function togglePw(id,btn){const el=document.getElementById(id);el.type=el.type==='password'?'text':'password';btn.textContent=el.type==='password'?'👁':'🙈';}
+function timeAgo(ts){
+  if(!ts) return '—';
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins  = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days  = Math.floor(diff / 86400000);
+  if(mins  <  1)  return 'เพิ่งส่ง';
+  if(mins  < 60)  return `${mins} นาทีที่แล้ว`;
+  if(hours < 24)  return `${hours} ชม. ที่แล้ว`;
+  if(days  < 30)  return `${days} วันที่แล้ว`;
+  const months = Math.floor(days / 30);
+  if(months < 12) return `${months} เดือนที่แล้ว`;
+  return `${Math.floor(months/12)} ปีที่แล้ว`;
+}
 function priorityLabel(p){ return {normal:'ปกติ',urgent:'ด่วน',very_urgent:'ด่วนมาก'}[p]||p; }
 function priorityBadge(p){
   if(p==='very_urgent') return '<span class="badge badge-urgent">ด่วนมาก</span>';
@@ -195,6 +244,16 @@ const DEFAULT_ROLES=[
 function getRoles(){let r=store.get(K.roles);return(!r||r.length===0)?DEFAULT_ROLES:r;}
 function saveRoles(r){store.set(K.roles,r);}
 function getRoleById(id){return getRoles().find(r=>r.id===id)||DEFAULT_ROLES[0];}
+function getRoleName(roleId){
+  if(!roleId) return 'User';
+  const role=getRoles().find(r=>r.id===roleId);
+  return role ? role.name : roleId;
+}
+function hasAdminAccess(u){
+  if(!u) return false;
+  if(u.role==='admin') return true;
+  return getRoleById(u.role)?.permissions?.can_admin === true;
+}
 function permLabel(p){return{can_send:'ส่งเอกสาร',can_receive:'รับเอกสาร',can_view_all:'ดูเอกสารทั้งหมด',can_manage_users:'จัดการ User',can_export:'Export ข้อมูล',can_admin:'Admin Panel',can_preview_docs:'Preview เนื้อหาเอกสาร'}[p]||p;}
 
 // ===================================================================
@@ -503,7 +562,7 @@ function renderNotifs(){
   const user=getCurrentUser();
   const myNotifs=getMyNotifs(user.username);
   markAllNotifsRead(); updateNotifBadge();
-  const isAdmin=user.role==='admin';
+  const isAdmin=hasAdminAccess(user);
   const listHtml=myNotifs.length===0?'<div class="empty-state"><p>ยังไม่มีการแจ้งเตือน</p></div>':
     '<div class="notif-list">'+myNotifs.map(n=>`
     <div class="notif-item${n.read?' read':' unread-dot'}">
@@ -591,7 +650,7 @@ function openStatModal(type){
       <td><div style="font-weight:600;font-size:13px;">${escapeHtml(u.fullName)}</div><div style="font-size:11px;color:var(--muted)">@${escapeHtml(u.username)}</div></td>
       <td>${escapeHtml(u.department)}</td>
       <td style="font-size:12px;">${escapeHtml(u.location||'—')}</td>
-      <td><span class="badge ${u.role==='admin'?'badge-admin':'badge-user'}">${u.role}</span></td>
+      <td><span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}">${getRoleName(u.role)}</span></td>
       <td style="font-size:11px;color:var(--muted)">${formatDateShort(u.createdAt)}</td>
     </tr>`).join('');
     content=`<div class="modal-scroll-body"><table class="data-table"><thead><tr><th>ชื่อ</th><th>แผนก</th><th>สถานที่</th><th>Role</th><th>สมัครเมื่อ</th></tr></thead><tbody>${rows||'<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--muted)">ไม่มีสมาชิก</td></tr>'}</tbody></table></div>`;
@@ -926,9 +985,9 @@ function enterDashboard(user){
     <div class="sb-user-info">
       <div class="sb-user-name">${escapeHtml(user.fullName)}</div>
       <div class="sb-user-meta">${escapeHtml(user.department)}</div>
-      <span class="role-badge">${user.role}</span>
+      <span class="role-badge">${getRoleName(user.role)}</span>
     </div>`;
-  document.getElementById('nav-admin').style.display=user.role==='admin'?'flex':'none';
+  document.getElementById('nav-admin').style.display=hasAdminAccess(user)?'flex':'none';
   updateInboxBadge();
   // Redirect to pending doc from QR link
   // init mobile bottom nav active state
@@ -979,7 +1038,7 @@ function setPageTitle(title,icon=''){
 async function renderHome(){
   setPageTitle('หน้าหลัก','🏠');
   const user=getCurrentUser();
-  const isAdmin=user.role==='admin';
+  const isAdmin=hasAdminAccess(user);
   const inbox=getInboxDocs(user);
   const outbox=getOutboxDocs(user);
   const pending=inbox.filter(d=>d.status==='pending').length;
@@ -1006,30 +1065,66 @@ async function renderHome(){
 
   const adminCols = '<th style="width:40px;"></th>';
 
+  // ── helper ──────────────────────────────────────────────────────────────────
+  function buildDocRow(doc){
+    const allowed   = canViewDoc(doc);
+    const searchStr = (doc.title+' '+doc.senderFullName+' '+doc.senderDepartment+' '+(doc.recipientFullName||doc.recipientDepartment||'')+' '+(doc.storageLocation||'')).toLowerCase();
+    const attChip   = doc.attachments?.length ? `<span class="att-chip" style="margin-left:4px;">📎${doc.attachments.length}</span>` : '';
+    const storageCell = doc.storageLocation ? `📦 ${escapeHtml(doc.storageLocation)}` : '<span style="color:var(--muted);">—</span>';
+    const pBadge    = doc.priority==='very_urgent'
+      ? '<span class="badge" style="background:rgba(239,68,68,.1);color:var(--red);font-size:10px;margin-left:3px;">ด่วนมาก</span>'
+      : doc.priority==='urgent'
+        ? '<span class="badge" style="background:rgba(239,68,68,.1);color:var(--red);font-size:10px;margin-left:3px;">ด่วน</span>' : '';
+    const statusCell = doc.status==='received'
+      ? '<span class="badge badge-received">รับแล้ว ✓</span>'
+      : '<span class="badge badge-pending">รอรับ</span>';
+    const elapsed   = `<span class="home-elapsed">${timeAgo(doc.createdAt)}</span>`;
+    const actionCell = allowed
+      ? `<td onclick="event.stopPropagation();"><button class="btn-icon" title="ดูเนื้อหา" onclick="openDocPreviewModal('${doc.id}')">👁</button></td>`
+      : `<td><span title="ไม่มีสิทธิ์ดูเอกสารนี้" style="color:var(--border);font-size:14px;">🔒</span></td>`;
+    const rowClick  = allowed ? `onclick="openDocPreviewModal('${doc.id}')" style="cursor:pointer;"` : `style="opacity:0.7;"`;
+    const rowClass  = allowed ? 'log-row-home log-row-clickable' : 'log-row-home';
+    return { allowed, searchStr, attChip, storageCell, pBadge, statusCell, elapsed, actionCell, rowClick, rowClass };
+  }
+
   const rowsHtml = logDocs.length===0
-    ? '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">ยังไม่มีเอกสาร</td></tr>'
+    ? '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted);">ยังไม่มีเอกสาร</td></tr>'
     : logDocs.map(doc=>{
-        const allowed = canViewDoc(doc);
-        const searchStr = (doc.title+' '+doc.senderFullName+' '+doc.senderDepartment+' '+(doc.recipientFullName||doc.recipientDepartment||'')+' '+(doc.storageLocation||'')).toLowerCase();
-        const attChip = doc.attachments?.length ? `<span class="att-chip" style="margin-left:4px;">📎${doc.attachments.length}</span>` : '';
-        const storageCell = doc.storageLocation ? `📦 ${escapeHtml(doc.storageLocation)}` : '<span style="color:var(--muted);">—</span>';
-        const priorityBadge2 = doc.priority==='urgent' ? '<span class="badge" style="background:rgba(239,68,68,.1);color:var(--red);font-size:10px;margin-left:3px;">ด่วน</span>' : '';
-        // ปุ่ม 👁 แสดงเฉพาะที่มีสิทธิ์
-        const actionCell = allowed
-          ? `<td onclick="event.stopPropagation();"><button class="btn-icon" title="ดูเนื้อหา" onclick="openDocPreviewModal('${doc.id}')">👁</button></td>`
-          : `<td><span title="ไม่มีสิทธิ์ดูเอกสารนี้" style="color:var(--border);font-size:14px;">🔒</span></td>`;
-        // คลิกแถวได้เฉพาะที่มีสิทธิ์
-        const rowClick = allowed ? `onclick="openDocPreviewModal('${doc.id}')" style="cursor:pointer;"` : `style="opacity:0.7;"`;
-        const rowClass = allowed ? 'log-row-home log-row-clickable' : 'log-row-home';
-        return `<tr class="${rowClass}" ${rowClick} data-search="${searchStr}">
-          <td><span style="font-weight:600;font-size:13px;">${escapeHtml(doc.title)}</span>${attChip}</td>
+        const r = buildDocRow(doc);
+        return `<tr class="${r.rowClass}" ${r.rowClick} data-search="${r.searchStr}">
+          <td><span style="font-weight:600;font-size:13px;">${escapeHtml(doc.title)}</span>${r.attChip}</td>
           <td>${escapeHtml(doc.senderFullName)}<br><span style="font-size:11px;color:var(--muted);">${escapeHtml(doc.senderDepartment||'')}${doc.senderLocation?' · '+escapeHtml(doc.senderLocation):''}</span></td>
           <td>${escapeHtml(doc.recipientFullName||doc.recipientDepartment||'—')}</td>
-          <td>${doc.status==='received'?'<span class="badge badge-received">รับแล้ว</span>':'<span class="badge badge-pending">รอรับ</span>'}${priorityBadge2}</td>
-          <td style="font-size:12px;">${storageCell}</td>
-          <td style="font-size:12px;white-space:nowrap;">${formatDate(doc.createdAt)}</td>
-          ${actionCell}
+          <td>${r.statusCell}${r.pBadge}</td>
+          <td style="font-size:12px;" class="col-storage">${r.storageCell}</td>
+          <td style="font-size:12px;white-space:nowrap;" class="col-date">${formatDate(doc.createdAt)}</td>
+          <td style="font-size:12px;white-space:nowrap;">${r.elapsed}</td>
+          ${r.actionCell}
         </tr>`;
+      }).join('');
+
+  // ── Mobile card list ─────────────────────────────────────────────────────────
+  const cardsHtml = logDocs.length===0
+    ? '<p style="text-align:center;padding:24px 0;color:var(--muted);font-size:13px;">ยังไม่มีเอกสาร</p>'
+    : logDocs.map(doc=>{
+        const r = buildDocRow(doc);
+        const cardClick = r.allowed ? `onclick="openDocPreviewModal('${doc.id}')"` : '';
+        const lockIcon  = r.allowed ? '' : '<span style="font-size:11px;color:var(--muted);">🔒</span>';
+        return `<div class="home-doc-card ${r.allowed?'hdc-clickable':''}" ${cardClick} data-search="${r.searchStr}">
+          <div class="hdc-top">
+            <span class="hdc-title">${escapeHtml(doc.title)}${r.attChip}</span>
+            <span>${r.statusCell}${r.pBadge}${lockIcon}</span>
+          </div>
+          <div class="hdc-meta">
+            <span>📤 ${escapeHtml(doc.senderFullName)} <span class="hdc-dept">${escapeHtml(doc.senderDepartment||'')}</span></span>
+            <span>📥 ${escapeHtml(doc.recipientFullName||doc.recipientDepartment||'—')}</span>
+          </div>
+          <div class="hdc-footer">
+            <span class="home-elapsed">🕐 ${timeAgo(doc.createdAt)}</span>
+            <span class="hdc-date">${formatDateShort(doc.createdAt)}</span>
+            ${doc.storageLocation?`<span class="hdc-storage">📦 ${escapeHtml(doc.storageLocation)}</span>`:''}
+          </div>
+        </div>`;
       }).join('');
 
   document.getElementById('page-body').innerHTML=`
@@ -1060,21 +1155,33 @@ async function renderHome(){
         <button class="btn-outline btn-sm" onclick="navigate('create')">+ สร้างเอกสาร</button>
       </div>
     </div>
-    <div style="overflow-x:auto;">
+    <!-- Desktop table -->
+    <div class="home-table-desktop" style="overflow-x:auto;">
       <table class="data-table" id="home-log-table">
         <thead><tr>
           <th>ชื่อเอกสาร</th>
           <th>ผู้ส่ง / แผนก</th>
           <th>ผู้รับ</th>
           <th>สถานะ</th>
-          <th>เก็บที่</th>
-          <th>วันที่ส่ง</th>
+          <th class="col-storage">เก็บที่</th>
+          <th class="col-date">วันที่ส่ง</th>
+          <th>นานแค่ไหน</th>
           <th></th>
         </tr></thead>
         <tbody id="home-log-body">${rowsHtml}</tbody>
       </table>
     </div>
     ${!isAdmin?'<div style="font-size:11px;color:var(--muted);padding:8px 12px;">🔒 = เอกสารที่ไม่เกี่ยวข้องกับคุณ ไม่สามารถเปิดดูได้</div>':''}
+  </div>
+  <!-- Mobile card list -->
+  <div class="home-cards-mobile">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <span style="font-size:13px;font-weight:700;">📋 Log การส่งเอกสาร <span style="font-size:11px;color:var(--muted);font-weight:400;">(${logDocs.length} รายการ)</span></span>
+      <input type="text" id="home-card-search" placeholder="🔍 ค้นหา..." oninput="filterHomeCards(this.value)"
+        style="padding:5px 10px;border:1px solid var(--border);border-radius:var(--r);font-size:12px;background:var(--white);color:var(--text);width:130px;">
+    </div>
+    <div id="home-cards-list">${cardsHtml}</div>
+    ${!isAdmin?'<div style="font-size:11px;color:var(--muted);padding:4px 0 8px;">🔒 = เอกสารที่ไม่เกี่ยวข้องกับคุณ ไม่สามารถเปิดดูได้</div>':''}
   </div>`;
 }
 
@@ -1082,6 +1189,11 @@ function filterHomeLog(q){
   const rows=document.querySelectorAll('#home-log-body tr.log-row-home');
   const lq=q.toLowerCase().trim();
   rows.forEach(r=>{ r.style.display=(!lq||r.dataset.search?.includes(lq))?'':'none'; });
+}
+function filterHomeCards(q){
+  const cards=document.querySelectorAll('#home-cards-list .home-doc-card');
+  const lq=q.toLowerCase().trim();
+  cards.forEach(c=>{ c.style.display=(!lq||c.dataset.search?.includes(lq))?'':'none'; });
 }
 
 // ===================================================================
@@ -1547,7 +1659,7 @@ function renderProfile(){
   <div class="doc-detail-card" style="max-width:500px;">
     <div style="padding:20px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;">
       <div style="width:52px;height:52px;border-radius:50%;background:var(--blue-lt);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:var(--blue);">${(u.fullName||'?')[0].toUpperCase()}</div>
-      <div><div style="font-size:17px;font-weight:700;">${escapeHtml(u.fullName)}</div><div style="color:var(--muted);font-size:13px;">@${escapeHtml(u.username)}</div><span class="badge ${u.role==='admin'?'badge-admin':'badge-user'}">${u.role}</span></div>
+      <div><div style="font-size:17px;font-weight:700;">${escapeHtml(u.fullName)}</div><div style="color:var(--muted);font-size:13px;">@${escapeHtml(u.username)}</div><span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}">${getRoleName(u.role)}</span></div>
     </div>
     <div class="ddc-row"><span class="ddc-label">อีเมล</span><span>${escapeHtml(u.email)}</span></div>
     <div class="ddc-row"><span class="ddc-label">แผนก</span><span>${escapeHtml(u.department)}</span></div>
@@ -1576,7 +1688,7 @@ function renderProfile(){
 let adminTab='members';
 function renderAdmin(){
   setPageTitle('Admin Panel','⚙️');
-  const user=getCurrentUser(); if(user.role!=='admin'){document.getElementById('page-body').innerHTML='<p>ไม่มีสิทธิ์</p>';return;}
+  const user=getCurrentUser(); if(!hasAdminAccess(user)){document.getElementById('page-body').innerHTML='<p>ไม่มีสิทธิ์</p>';return;}
   renderAdminTab(adminTab);
 }
 function renderAdminTab(tab){
@@ -1598,7 +1710,7 @@ function renderAdminTab(tab){
         <div class="uli-avatar">${initials}</div>
         <div class="uli-info">
           <div class="uli-name">${escapeHtml(u.fullName)}</div>
-          <div class="uli-meta">@${escapeHtml(u.username)} · <span class="badge ${u.role==='admin'?'badge-admin':'badge-user'}" style="font-size:10px;padding:1px 6px;">${u.role}</span></div>
+          <div class="uli-meta">@${escapeHtml(u.username)} · <span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}" style="font-size:10px;padding:1px 6px;">${getRoleName(u.role)}</span></div>
         </div>
       </div>`;
     }).join('');
@@ -1803,7 +1915,7 @@ function renderUserDetailPanel(username){
       <div>
         <div class="udp-name">${escapeHtml(u.fullName)}</div>
         <div class="udp-sub">@${escapeHtml(u.username)} · สมัครเมื่อ ${formatDate(u.createdAt)}</div>
-        <span class="badge ${u.role==='admin'?'badge-admin':'badge-user'}" style="margin-top:5px;">${u.role}</span>
+        <span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}" style="margin-top:5px;">${getRoleName(u.role)}</span>
         ${isSelf?'<span class="badge" style="margin-left:6px;margin-top:5px;background:rgba(16,185,129,0.1);color:var(--green);border:1px solid rgba(16,185,129,0.2);">ตัวเอง</span>':''}
       </div>
     </div>
