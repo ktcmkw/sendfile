@@ -23,6 +23,21 @@ const BASE_URL = (()=>{
 })();
 const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
 
+// ── Cache Version Check ─────────────────────────────────────────
+// When APP_VERSION changes (new deploy), automatically clears all
+// stale K.* localStorage keys so mobile browsers don't show old data
+const APP_VERSION = 'v7-20260510';
+(function clearCacheOnVersionChange() {
+  const stored = localStorage.getItem('sf_app_version');
+  if (stored !== APP_VERSION) {
+    // New deploy detected — wipe all data caches (keep JWT session)
+    const keysToKeep = ['sf_jwt']; // sessionStorage key, but kept for safety
+    Object.values(K).forEach(k => localStorage.removeItem(k));
+    localStorage.setItem('sf_app_version', APP_VERSION);
+    console.log('[Cache] Version changed', stored, '→', APP_VERSION, '— localStorage cleared');
+  }
+})();
+
 // ===================================================================
 // API LAYER — replaces localStorage writes with server calls
 // ===================================================================
