@@ -117,18 +117,26 @@ function connectSocket(username) {
       timeout: 10000
     });
 
-    // join room immediately and re-join after any reconnect
+    // join room immediately
     _socket.emit('join', username);
-    _socket.on('connect', () => {
-      console.log('[socket] connected, joining room:', username);
+
+    // 'connect' fires on BOTH initial connect AND every reconnect in Socket.io v4
+    // Note: socket.on('reconnect') does NOT fire in v4 — must use 'connect' instead
+    let _isFirstConnect = true;
+    _socket.on('connect', async () => {
       _socket.emit('join', username);
-    });
-    _socket.on('reconnect', async (attempt) => {
-      console.log('[socket] reconnected after', attempt, 'attempts');
-      _socket.emit('join', username);
-      await syncFromServer(); updateInboxBadge(); updateNotifBadge();
-      if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
-        navigate(currentPage);
+      if (_isFirstConnect) {
+        // Initial connect — data already synced at login, skip re-sync
+        _isFirstConnect = false;
+        console.log('[socket] initial connect, room:', username);
+      } else {
+        // Reconnect after server sleep or network drop — must re-fetch to get missed events
+        console.log('[socket] reconnected, syncing fresh data...');
+        await syncFromServer();
+        updateInboxBadge(); updateNotifBadge();
+        if (['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
+          navigate(currentPage);
+      }
     });
     _socket.on('disconnect', (reason) => {
       console.warn('[socket] disconnected:', reason);
@@ -141,8 +149,10 @@ function connectSocket(username) {
         localStorage.setItem(K.docs,JSON.stringify(docs));
         if(typeof adminSelectedDoc!=='undefined' && String(adminSelectedDoc)===String(data.docId)) adminSelectedDoc=null;
       } else if(data?.type==='clear_all'){
+        // Clear cache immediately for instant UI, then confirm from DB
         localStorage.setItem(K.docs, JSON.stringify([]));
         localStorage.setItem(K.notifs, JSON.stringify([]));
+        await syncFromServer(); // confirm empty state from DB
       } else if(data?.doc) {
         // Merge incoming doc into cache AND sync to ensure recipient has full data
         const docs=getDocs();
