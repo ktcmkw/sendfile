@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   location      VARCHAR(100),
   role_id       VARCHAR(50) DEFAULT 'user',
   password_hash VARCHAR(255) NOT NULL,
+  passkey_hash  VARCHAR(255),
   created_at    BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT * 1000
 );
 

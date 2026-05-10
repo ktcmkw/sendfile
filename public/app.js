@@ -75,7 +75,19 @@ function connectSocket(username) {
   try {
     _socket = io({ transports: ['websocket','polling'] });
     _socket.emit('join', username);
-    _socket.on('doc_update', async () => { await syncFromServer(); updateInboxBadge(); updateNotifBadge(); const pg=document.querySelector('.page.active'); if(pg) navigate(pg.dataset.page||'home'); });
+    _socket.on('doc_update', async (data) => {
+      if(data?.type==='deleted'){
+        // Remove deleted doc from local cache immediately
+        const docs=getDocs().filter(d=>d.id!==data.docId);
+        localStorage.setItem(K.docs,JSON.stringify(docs));
+        updateInboxBadge(); updateNotifBadge();
+        // Refresh current page if relevant
+        if(['inbox','outbox','admin','home'].includes(currentPage)) navigate(currentPage);
+      } else {
+        await syncFromServer(); updateInboxBadge(); updateNotifBadge();
+        if(['inbox','outbox','admin','home'].includes(currentPage)) navigate(currentPage);
+      }
+    });
     _socket.on('new_notif',  async () => { await syncFromServer(); updateNotifBadge(); });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
@@ -191,6 +203,92 @@ async function uploadDocToGoogleDrive(doc){
   }catch(e){showToast('เกิดข้อผิดพลาด: '+e.message,'error');}
 }
 
+// ─── Drive helper: get OAuth token ────────────────────────────────
+async function getDriveToken(clientId){
+  return new Promise((resolve,reject)=>{
+    if(typeof google==='undefined'){reject(new Error('Google API ยังโหลดไม่เสร็จ'));return;}
+    google.accounts.oauth2.initTokenClient({
+      client_id:clientId,
+      scope:'https://www.googleapis.com/auth/drive.file',
+      callback:(resp)=>{if(resp.error)reject(new Error(resp.error));else resolve(resp.access_token);}
+    }).requestAccessToken();
+  });
+}
+
+// ─── Drive helper: upload single file ─────────────────────────────
+async function uploadFileToDrive(att, token, cfg){
+  // att = {name, type, size, base64}
+  const res = await fetch(att.base64);
+  const blob = await res.blob();
+  const meta = {name: att.name, parents: cfg.folderId ? [cfg.folderId] : []};
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(meta)],{type:'application/json'}));
+  form.append('file', blob);
+  const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',{
+    method:'POST', headers:{Authorization:'Bearer '+token}, body:form
+  });
+  const data = await r.json();
+  return data.id ? {id:data.id, webViewLink:data.webViewLink} : null;
+}
+
+// ─── Cleanup expired Drive files (called on login) ─────────────────
+async function cleanupExpiredDriveFiles(){
+  const cfg = getGDriveConfig();
+  if(!cfg.enabled||!cfg.clientId) return;
+  try {
+    const expired = await apiCall('GET','/api/docs/expired-drive-ids');
+    if(!expired||!expired.length) return;
+    // Collect all Drive file IDs to delete
+    const toDelete = [];
+    expired.forEach(e=>{
+      if(e.driveId) toDelete.push(e.driveId);
+      if(e.attachmentDriveIds) toDelete.push(...e.attachmentDriveIds);
+    });
+    if(!toDelete.length) return;
+    const token = await getDriveToken(cfg.clientId);
+    for(const fileId of toDelete){
+      try {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`,{
+          method:'DELETE', headers:{Authorization:'Bearer '+token}
+        });
+      } catch(_){}
+    }
+    console.log(`[Drive Cleanup] Deleted ${toDelete.length} Drive files`);
+  } catch(e){ console.warn('[Drive Cleanup]', e.message); }
+}
+
+// ─── Admin: delete a document ──────────────────────────────────────
+async function deleteDoc(id){
+  const doc = getDocById(id);
+  if(!confirm(`ลบเอกสาร "${doc?.title||id}" ?
+ไม่สามารถกู้คืนได้`)) return;
+  // Try delete Drive files first (if user has token)
+  if(doc?.attachments?.some(a=>a.driveId)){
+    const cfg = getGDriveConfig();
+    if(cfg.enabled&&cfg.clientId){
+      try {
+        const token = await getDriveToken(cfg.clientId);
+        for(const att of doc.attachments){
+          if(att.driveId){
+            await fetch(`https://www.googleapis.com/drive/v3/files/${att.driveId}`,{
+              method:'DELETE', headers:{Authorization:'Bearer '+token}
+            });
+          }
+        }
+      } catch(_){}
+    }
+  }
+  const r = await apiCall('DELETE','/api/docs/'+id);
+  if(r?.ok){
+    showToast('ลบเอกสารเรียบร้อย');
+    adminSelectedDoc=null;
+    await syncFromServer();
+    renderAdminTab('docs');
+  } else {
+    showToast('ลบไม่สำเร็จ','error');
+  }
+}
+
 // ===================================================================
 // FILE ATTACHMENTS
 // ===================================================================
@@ -248,13 +346,19 @@ function renderAttachmentList(elId){
 
 function renderDocAttachments(doc){
   if(!doc.attachments||doc.attachments.length===0)return'';
-  const items=doc.attachments.map(a=>`
-  <div class="attachment-item">
+  const items=doc.attachments.map(a=>{
+    const actionBtn = a.driveId
+      ? `<a class="att-view" href="${escapeHtml(a.driveUrl||'#')}" target="_blank" onclick="event.stopPropagation()">🔗 Drive</a>`
+      : a.base64
+        ? `<a class="att-view" href="${escapeHtml(a.base64)}" download="${escapeHtml(a.name)}" onclick="event.stopPropagation()">⬇ ดาวน์โหลด</a>`
+        : '';
+    return `<div class="attachment-item">
     <span class="att-icon">${fileTypeIcon(a.name)}</span>
     <span class="att-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</span>
     <span class="att-size">${formatFileSize(a.size)}</span>
-    <a class="att-view" href="${escapeHtml(a.base64)}" download="${escapeHtml(a.name)}" onclick="event.stopPropagation()">⬇ ดาวน์โหลด</a>
-  </div>`).join('');
+    ${actionBtn}
+  </div>`;
+  }).join('');
   return`<div class="doc-content-area" style="margin-top:12px;">
     <div class="doc-content-header">📎 ไฟล์แนบ (${doc.attachments.length})</div>
     <div class="doc-content-body" style="padding:12px;"><div class="attachment-list">${items}</div></div>
@@ -486,8 +590,17 @@ async function handleRegister(){
   const res = await apiCall('POST','/api/auth/register',{username,fullName,email,department,location,password});
   if(regBtn){regBtn.disabled=false;regBtn.textContent='สมัครสมาชิก';}
   if(!res||res.error){ showAuthAlert(res?.error||'สมัครไม่สำเร็จ','error'); return; }
-  showAuthAlert('สมัครสมาชิกเรียบร้อย! กรุณาเข้าสู่ระบบ','success');
-  setTimeout(()=>switchTab('login'),1200);
+  // Auto-login after registration
+  _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
+  showAuthAlert('กำลังโหลดข้อมูล...','');
+  await syncFromServer();
+  const regUser = getUsers().find(u=>u.username===username);
+  if(!regUser){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
+  store.setObj(K.session,{username:regUser.username,loginAt:Date.now()});
+  connectSocket(username);
+  enterDashboard(regUser);
+  // Show passkey setup modal after dashboard loads
+  setTimeout(()=>openPasskeySetupModal(), 500);
 }
 
 async function handleLogin(){
@@ -505,6 +618,51 @@ async function handleLogin(){
   await syncFromServer();
   const user = getUsers().find(u=>u.username===username);
   if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
+  store.setObj(K.session,{username:user.username,loginAt:Date.now()});
+  connectSocket(username);
+  enterDashboard(user);
+}
+
+function openPasskeySetupModal(){
+  openModal('ตั้ง Passkey สำหรับเข้าระบบ',
+    `<p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Passkey 6 หลัก ใช้แทนรหัสผ่านสำหรับยืนยันตัวตนได้อย่างรวดเร็ว</p>
+     <div class="form-group">
+       <label>Passkey 6 หลัก</label>
+       <input type="number" id="passkey-input" maxlength="6" placeholder="กรอกตัวเลข 6 หลัก" oninput="if(this.value.length>6)this.value=this.value.slice(0,6)" style="letter-spacing:4px;font-size:18px;text-align:center;">
+     </div>
+     <div class="form-group">
+       <label>ยืนยัน Passkey</label>
+       <input type="number" id="passkey-confirm" maxlength="6" placeholder="กรอกซ้ำอีกครั้ง" oninput="if(this.value.length>6)this.value=this.value.slice(0,6)" style="letter-spacing:4px;font-size:18px;text-align:center;">
+     </div>`,
+    `<button class="btn-outline" onclick="closeModal()">ข้ามไปก่อน</button>
+     <button class="btn-primary" onclick="setupPasskey()">🔑 ตั้ง Passkey</button>`);
+}
+
+async function setupPasskey(){
+  const val = (document.getElementById('passkey-input')?.value||'').trim();
+  const confirm = (document.getElementById('passkey-confirm')?.value||'').trim();
+  if(!/^\d{6}$/.test(val)){ showToast('Passkey ต้องเป็นตัวเลข 6 หลักเท่านั้น','error'); return; }
+  if(val!==confirm){ showToast('Passkey ทั้งสองช่องไม่ตรงกัน','error'); return; }
+  const res = await apiCall('POST','/api/auth/passkey-setup',{passkey:val});
+  if(!res||res.error){ showToast(res?.error||'ตั้ง Passkey ไม่สำเร็จ','error'); return; }
+  closeModal();
+  showToast('ตั้ง Passkey เรียบร้อยแล้ว ✓');
+}
+
+async function handlePasskeyLogin(){
+  const username = (document.getElementById('pk-username')?.value||'').trim().toLowerCase();
+  const passkey = (document.getElementById('pk-passkey')?.value||'').trim();
+  if(!username||!passkey){ showToast('กรุณากรอกชื่อผู้ใช้และ Passkey','error'); return; }
+  if(!/^\d{6}$/.test(passkey)){ showToast('Passkey ต้องเป็นตัวเลข 6 หลัก','error'); return; }
+  const pkBtn = document.getElementById('pk-login-btn');
+  if(pkBtn){pkBtn.disabled=true;pkBtn.textContent='กำลังเข้าสู่ระบบ...';}
+  const res = await apiCall('POST','/api/auth/passkey-login',{username,passkey});
+  if(pkBtn){pkBtn.disabled=false;pkBtn.textContent='เข้าสู่ระบบ';}
+  if(!res||res.error){ showToast(res?.error||'เข้าสู่ระบบไม่สำเร็จ','error'); return; }
+  _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
+  await syncFromServer();
+  const user = getUsers().find(u=>u.username===username);
+  if(!user){ showToast('ไม่พบข้อมูลผู้ใช้','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
   connectSocket(username);
   enterDashboard(user);
@@ -529,6 +687,28 @@ function switchTab(tab){
   document.getElementById('form-register').style.display=tab==='register'?'block':'none';
   document.getElementById('tab-login').className='tab-btn'+(tab==='login'?' active':'');
   document.getElementById('tab-register').className='tab-btn'+(tab==='register'?' active':'');
+  // Hide passkey section when switching tabs
+  const pkSec=document.getElementById('passkey-section');
+  if(pkSec) pkSec.style.display='none';
+  const pkBtn=document.getElementById('passkey-toggle-btn');
+  if(pkBtn) pkBtn.textContent='🔑 เข้าด้วย Passkey';
+  showAuthAlert('','');
+}
+
+function togglePasskeySection(){
+  const pkSec=document.getElementById('passkey-section');
+  const loginForm=document.getElementById('form-login');
+  const pkBtn=document.getElementById('passkey-toggle-btn');
+  const isShowing=pkSec&&pkSec.style.display!=='none';
+  if(isShowing){
+    pkSec.style.display='none';
+    if(loginForm) loginForm.style.display='block';
+    if(pkBtn) pkBtn.textContent='🔑 เข้าด้วย Passkey';
+  } else {
+    if(pkSec) pkSec.style.display='block';
+    if(loginForm) loginForm.style.display='none';
+    if(pkBtn) pkBtn.textContent='← กลับไปล็อกอินปกติ';
+  }
   showAuthAlert('','');
 }
 document.addEventListener('keydown',e=>{ if(e.key==='Enter'){ const t=document.getElementById('form-login').style.display!=='none'?'login':'register'; if(t==='login')handleLogin(); else handleRegister(); }});
@@ -623,6 +803,8 @@ function enterDashboard(user){
   const mhome=document.getElementById('mnav-home');if(mhome)mhome.classList.add('active');
   // init notification badge
   updateNotifBadge();
+  // Cleanup expired Drive files in background (silent)
+  setTimeout(()=>cleanupExpiredDriveFiles(), 3000);
   if(window._pendingDoc){
     const docId=window._pendingDoc; window._pendingDoc=null;
     navigate('qr',{docId}); return;
@@ -866,10 +1048,34 @@ async function wzSubmit(){
     recipientType='department'; recipientDepartment=wz.recipient.slice(5);
     recipientFullName=recipientDepartment+' (ทั้งแผนก)';
   }
-  const content = wz.mode==='form'
+  // ── Upload attachments to Google Drive if configured ──────────────
+  let finalAttachments=[...wzAttachments];
+  const cfg=getGDriveConfig();
+  if(cfg.enabled&&cfg.clientId&&wzAttachments.length>0){
+    try{
+      showToast('📤 กำลัง upload ไฟล์ขึ้น Google Drive...');
+      const token=await getDriveToken(cfg.clientId);
+      const uploaded=[];
+      for(const att of wzAttachments){
+        const result=await uploadFileToDrive(att,token,cfg);
+        if(result){
+          // Store Drive reference, discard base64 to save DB space
+          uploaded.push({name:att.name,type:att.type,size:att.size,driveId:result.id,driveUrl:result.webViewLink});
+        } else {
+          uploaded.push(att); // fallback: keep base64
+        }
+      }
+      finalAttachments=uploaded;
+      showToast('✅ Upload ไฟล์แนบขึ้น Drive เรียบร้อย');
+    }catch(e){
+      showToast('Drive upload ไม่สำเร็จ — บันทึกใน server แทน','error');
+      // finalAttachments remains base64
+    }
+  }
+  const docContent = wz.mode==='form'
     ? {blocks:wz.blocks}
     : {tableHeading:wz.tableHeading,columns:wz.columns,rows:wz.rows};
-  const doc=await createDocument({title:wz.title,contentType:wz.mode,content,recipientType,recipientUsername,recipientDepartment,recipientFullName,priority:wz.priority,attachmentNote:wz.attachmentNote,attachments:[...wzAttachments]});
+  const doc=await createDocument({title:wz.title,contentType:wz.mode,content:docContent,recipientType,recipientUsername,recipientDepartment,recipientFullName,priority:wz.priority,attachmentNote:wz.attachmentNote,attachments:finalAttachments});
   wzAttachments=[];
   wz.step=3; wz.lastDoc=doc;
   renderWizardSuccess(doc);
@@ -1236,7 +1442,10 @@ function renderAdminTab(tab){
         <td>${escapeHtml(d.senderFullName)}</td>
         <td>${formatDateShort(d.createdAt)}</td>
         <td>${d.status==='received'?'<span class="badge badge-received">รับแล้ว</span>':'<span class="badge badge-pending">รอรับ</span>'}</td>
-        <td><button class="btn-icon" onclick="event.stopPropagation();navigate('qr',{docId:'${d.id}'})">QR</button></td>
+        <td style="white-space:nowrap;">
+          <button class="btn-icon" onclick="event.stopPropagation();navigate('qr',{docId:'${d.id}'})" title="QR Viewer">QR</button>
+          <button class="btn-icon" style="color:var(--red);margin-left:4px;" onclick="event.stopPropagation();deleteDoc('${d.id}')" title="ลบเอกสาร">🗑</button>
+        </td>
       </tr>`).join('');
     const detailHtml=selDoc?`
       <div class="adp-header">
@@ -1252,17 +1461,25 @@ function renderAdminTab(tab){
         <div class="ddc-row"><span class="ddc-label">สถานะ</span>${selDoc.status==='received'?'<span class="badge badge-received">รับแล้ว ✓</span>':'<span class="badge badge-pending">รอรับ</span>'}</div>
         ${selDoc.status==='received'?`<div class="ddc-row"><span class="ddc-label">เก็บที่</span><span>${escapeHtml(selDoc.storageLocation||'')}</span></div>`:''}
         <div style="margin-top:14px;"><div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">📄 เนื้อหาเอกสาร</div>${renderDocContent(selDoc)}</div>
-        ${selDoc.attachments&&selDoc.attachments.length>0?`<div style="margin-top:10px;"><div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px;">📎 ไฟล์แนบ (${selDoc.attachments.length})</div><div class="attachment-list">${selDoc.attachments.map(a=>`<div class="attachment-item"><span class="att-icon">${fileTypeIcon(a.name)}</span><span class="att-name">${escapeHtml(a.name)}</span><span class="att-size">${formatFileSize(a.size)}</span><a class="att-view" href="${escapeHtml(a.base64)}" download="${escapeHtml(a.name)}">⬇ ดาวน์โหลด</a></div>`).join('')}</div></div>`:''}
+        ${selDoc.attachments&&selDoc.attachments.length>0?`<div style="margin-top:10px;"><div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px;">📎 ไฟล์แนบ (${selDoc.attachments.length})</div><div class="attachment-list">${selDoc.attachments.map(a=>{const btn=a.driveId?`<a class="att-view" href="${escapeHtml(a.driveUrl||'#')}" target="_blank">🔗 Drive</a>`:a.base64?`<a class="att-view" href="${escapeHtml(a.base64)}" download="${escapeHtml(a.name)}">⬇ ดาวน์โหลด</a>`:'';return`<div class="attachment-item"><span class="att-icon">${fileTypeIcon(a.name)}</span><span class="att-name">${escapeHtml(a.name)}</span><span class="att-size">${formatFileSize(a.size)}</span>${btn}</div>`;}).join('')}</div></div>`:''}
         <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn-primary btn-sm" onclick="navigate('qr',{docId:'${selDoc.id}'})">🔗 ดู QR Viewer</button>
           <button class="btn-outline btn-sm" onclick="uploadDocToGoogleDrive(getDocById('${selDoc.id}'))">☁️ Upload Drive</button>
           <button class="btn-outline btn-sm" onclick="exportSingleDoc('${selDoc.id}')">⬇ Export JSON</button>
+          <button class="btn-sm" style="background:var(--red);color:#fff;border:none;border-radius:var(--r);padding:5px 12px;cursor:pointer;font-size:12px;" onclick="deleteDoc('${selDoc.id}')">🗑 ลบเอกสาร</button>
         </div>
         <div style="margin-top:14px;">${renderCommentSection(selDoc)}</div>
       </div>`:`<div class="adp-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg><p style="font-weight:700;font-size:14px;">เลือกเอกสาร</p><p style="font-size:12px;margin-top:4px;">คลิกแถวทางซ้ายเพื่ออ่านเนื้อหา</p></div>`;
-    content=`<div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-size:13px;color:var(--muted);">เอกสารทั้งหมด <strong style="color:var(--text)">${docs.length}</strong> รายการ</span>
-      <button class="btn-outline btn-sm" onclick="exportDocs()">⬇️ Export JSON</button>
+    const expiringSoon = docs.filter(d => (Date.now()-d.createdAt) > 27*24*60*60*1000).length;
+    content=`<div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:13px;color:var(--muted);">เอกสารทั้งหมด <strong style="color:var(--text)">${docs.length}</strong> รายการ</span>
+        ${expiringSoon>0?`<span style="font-size:11px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:6px;padding:2px 8px;">⚠️ ${expiringSoon} รายการจะลบใน 3 วัน</span>`:''}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <span style="font-size:11px;color:var(--muted);align-self:center;">🗑 ลบอัตโนมัติหลัง 30 วัน</span>
+        <button class="btn-outline btn-sm" onclick="exportDocs()">⬇️ Export JSON</button>
+      </div>
     </div>
     <div class="log-layout">
       <div class="log-panel"><table class="data-table"><thead><tr><th>รหัส</th><th>ชื่อเอกสาร</th><th>จาก</th><th>วันที่</th><th>สถานะ</th><th></th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
@@ -1318,6 +1535,25 @@ function renderAdminTab(tab){
         </div>
       </div>
     </div>
+    <div class="card-section" style="margin-bottom:16px;">
+      <div class="card-section-header" style="display:flex;align-items:center;gap:10px;">
+        📧 Email Notification (SMTP)
+        <span id="email-status-badge" class="gdrive-status gdrive-disconnected">● ตรวจสอบ...</span>
+      </div>
+      <div class="card-section-body">
+        <div id="email-status-detail" style="font-size:13px;color:var(--muted);margin-bottom:10px;">กำลังโหลดสถานะ...</div>
+        <div style="background:#f8f7ff;border-left:4px solid var(--blue);padding:14px;border-radius:8px;font-size:12px;line-height:1.8;color:var(--muted);">
+          <strong style="color:var(--text);">วิธีตั้งค่า SMTP บน Render.com:</strong><br>
+          ไปที่ Dashboard → Service → Environment → Add Environment Variable<br>
+          <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">SMTP_HOST</code> — เช่น <code>smtp.gmail.com</code><br>
+          <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">SMTP_PORT</code> — <code>587</code> (TLS) หรือ <code>465</code> (SSL)<br>
+          <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">SMTP_USER</code> — อีเมลผู้ส่ง<br>
+          <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">SMTP_PASS</code> — รหัสผ่านหรือ App Password<br>
+          <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">EMAIL_FROM</code> — ชื่อผู้ส่ง (เว้นว่างได้)<br>
+        </div>
+        <button class="btn-outline btn-sm" style="margin-top:10px;" onclick="checkEmailStatus()">🔄 ตรวจสอบสถานะ</button>
+      </div>
+    </div>
     <div class="card-section"><div class="card-section-header">สถานที่จัดเก็บเอกสาร <button class="btn-primary btn-sm" onclick="addLocation()">+ เพิ่ม</button></div>
     <div class="card-section-body">
     ${locs.map((l,i)=>`<div class="doc-card" style="margin-bottom:6px;">
@@ -1328,6 +1564,7 @@ function renderAdminTab(tab){
     </div></div>`;
   }
   document.getElementById('page-body').innerHTML=`<div class="admin-tabs">${tabBar}</div>${content}`;
+  if(tab==='settings') setTimeout(checkEmailStatus, 100);
 }
 
 // ── Admin: User selection & detail panel ──────────────────────────────────
@@ -1501,6 +1738,22 @@ async function saveGDriveSettings(){
   await syncFromServer();
   showToast('บันทึกการตั้งค่า Google Drive แล้ว');
   renderAdminTab('settings');
+}
+
+async function checkEmailStatus(){
+  const res = await apiCall('GET','/api/settings/email-status');
+  const badge = document.getElementById('email-status-badge');
+  const detail = document.getElementById('email-status-detail');
+  if(!res){ if(badge)badge.textContent='● ตรวจสอบไม่ได้'; return; }
+  if(badge){
+    badge.className='gdrive-status '+(res.configured?'gdrive-connected':'gdrive-disconnected');
+    badge.textContent=res.configured?'● เชื่อมต่อแล้ว':'● ยังไม่ตั้งค่า';
+  }
+  if(detail){
+    detail.innerHTML=res.configured
+      ? `<strong style="color:var(--green);">✅ SMTP พร้อมใช้งาน</strong> — Host: <code>${res.host}</code><br>ระบบจะส่งอีเมลแจ้งเตือนอัตโนมัติเมื่อมีการส่งเอกสาร`
+      : '<span style="color:var(--amber);">⚠️ ยังไม่ได้ตั้งค่า SMTP</span> — ระบบจะไม่ส่งอีเมลแจ้งเตือน กรุณาตั้งค่าตามคำแนะนำด้านล่าง';
+  }
 }
 
 // ── Role CRUD ─────────────────────────────────────────────────

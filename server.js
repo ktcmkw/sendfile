@@ -6,6 +6,43 @@ const bcrypt     = require('bcryptjs');
 const jwt        = require('jsonwebtoken');
 const path       = require('path');
 const { initDB, query, auditLog } = require('./db');
+const nodemailer = require('nodemailer');
+function getMailer() {
+  if (!process.env.SMTP_HOST) return null;
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT||'587'),
+    secure: process.env.SMTP_PORT === '465',
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+  });
+}
+async function sendDocEmail(recipientEmail, recipientName, senderName, doc, baseUrl) {
+  const mailer = getMailer();
+  if (!mailer || !recipientEmail) return;
+  const docUrl = `${baseUrl}?doc=${doc.id}`;
+  try {
+    await mailer.sendMail({
+      from: process.env.EMAIL_FROM || process.env.SMTP_USER,
+      to: recipientEmail,
+      subject: `📨 คุณได้รับเอกสารใหม่: ${doc.title}`,
+      html: `
+        <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;">
+          <h2 style="color:#6366f1;">📨 SendFile — มีเอกสารใหม่สำหรับคุณ</h2>
+          <p>สวัสดี <strong>${recipientName}</strong>,</p>
+          <p><strong>${senderName}</strong> ได้ส่งเอกสารมาให้คุณ:</p>
+          <div style="background:#f8f7ff;border-left:4px solid #6366f1;padding:16px;border-radius:8px;margin:16px 0;">
+            <strong>${doc.title}</strong><br>
+            <span style="color:#666;font-size:14px;">ความเร่งด่วน: ${doc.priority==='urgent'?'🔴 ด่วนมาก':doc.priority==='high'?'🟡 สำคัญ':'🟢 ปกติ'}</span>
+          </div>
+          <a href="${docUrl}" style="display:inline-block;background:#6366f1;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">
+            📄 เปิดดูเอกสาร
+          </a>
+          <p style="color:#999;font-size:12px;margin-top:24px;">ระบบ SendFile — PEO Thailand</p>
+        </div>
+      `
+    });
+  } catch(e) { console.warn('[Email] Failed:', e.message); }
+}
 
 const app        = express();
 const httpServer = createServer(app);
@@ -97,6 +134,30 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/auth/me', auth, (req, res) => res.json(fmtUser(req.user)));
 
+app.post('/api/auth/passkey-setup', auth, async (req, res) => {
+  try {
+    const { passkey } = req.body;
+    if (!passkey || !/^\d{6}$/.test(passkey)) return res.status(400).json({ error: 'Passkey ต้องเป็นตัวเลข 6 หลัก' });
+    const hash = await bcrypt.hash(passkey, 10);
+    await query('UPDATE users SET passkey_hash=$1 WHERE username=$2', [hash, req.user.username]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/passkey-login', async (req, res) => {
+  try {
+    const { username, passkey } = req.body;
+    if (!username || !passkey) return res.status(400).json({ error: 'กรุณากรอกข้อมูลให้ครบ' });
+    const { rows } = await query('SELECT * FROM users WHERE username=$1', [username]);
+    if (!rows.length) return res.status(401).json({ error: 'ไม่พบผู้ใช้' });
+    if (!rows[0].passkey_hash) return res.status(401).json({ error: 'ผู้ใช้นี้ยังไม่ได้ตั้ง Passkey' });
+    const ok = await bcrypt.compare(passkey, rows[0].passkey_hash);
+    if (!ok) return res.status(401).json({ error: 'Passkey ไม่ถูกต้อง' });
+    await auditLog('passkey_login', username, null, {}, req.ip);
+    res.json({ token: tok(username), username, role: rows[0].role_id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // USERS
 // ═══════════════════════════════════════════════════════════════════
@@ -182,6 +243,17 @@ app.post('/api/docs', auth, async (req, res) => {
     const { rows } = await query('SELECT * FROM documents WHERE id=$1', [d.id]);
     const doc = fmtDoc(rows[0]);
     req.io.emit('doc_update', { type: 'created', doc });
+    // Send email notification to recipient(s)
+    const origin = req.headers.origin || `https://${req.headers.host}`;
+    if (d.recipientType === 'user' && d.recipientUsername) {
+      const { rows: rr } = await query('SELECT email,full_name FROM users WHERE username=$1', [d.recipientUsername]);
+      if (rr[0]?.email) sendDocEmail(rr[0].email, rr[0].full_name, doc.senderFullName, doc, origin);
+    } else if (d.recipientType === 'department') {
+      const { rows: deptUsers } = await query('SELECT email,full_name FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, d.senderUsername]);
+      for (const u of deptUsers) {
+        if (u.email) sendDocEmail(u.email, u.full_name, doc.senderFullName, doc, origin);
+      }
+    }
     res.json(doc);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -224,6 +296,34 @@ app.patch('/api/docs/:id/drive', auth, async (req, res) => {
     const { driveId, driveUrl } = req.body;
     await query('UPDATE documents SET drive_id=$1,drive_url=$2 WHERE id=$3', [driveId, driveUrl, req.params.id]);
     res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Delete document (admin only) ─────────────────────────────────────────────
+app.delete('/api/docs/:id', auth, admin, async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const { rows } = await query('SELECT id,title,attachments FROM documents WHERE id=$1', [docId]);
+    if (!rows.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
+    await query('DELETE FROM notifications WHERE doc_id=$1', [docId]);
+    await query('DELETE FROM documents WHERE id=$1', [docId]);
+    await auditLog('doc_delete', req.user.username, docId, { title: rows[0].title }, req.ip);
+    req.io.emit('doc_update', { type: 'deleted', docId });
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Drive file IDs for expired docs (client uses these to delete from Drive) ─
+app.get('/api/docs/expired-drive-ids', auth, async (req, res) => {
+  try {
+    const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const { rows } = await query('SELECT id, attachments, drive_id FROM documents WHERE created_at < $1', [cutoff]);
+    const result = rows.map(r => ({
+      docId: r.id,
+      driveId: r.drive_id || null,
+      attachmentDriveIds: (r.attachments || []).filter(a => a.driveId).map(a => a.driveId)
+    }));
+    res.json(result);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -363,6 +463,10 @@ app.put('/api/settings/gdrive', auth, admin, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/settings/email-status', auth, admin, async (req, res) => {
+  res.json({ configured: !!process.env.SMTP_HOST, host: process.env.SMTP_HOST||'' });
+});
+
 app.get('/api/settings/audit-log', auth, admin, async (req, res) => {
   try {
     const { rows } = await query('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200');
@@ -384,9 +488,34 @@ io.on('connection', socket => {
 app.get('*', (req, res) =>
   res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
 
+// ─── Auto-cleanup expired docs (30 days) ──────────────────────────
+async function cleanupExpiredDocs() {
+  try {
+    const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const expired = await query('SELECT id FROM documents WHERE created_at < $1', [cutoff]);
+    if (expired.rows.length === 0) return;
+    const ids = expired.rows.map(r => r.id);
+    await query('DELETE FROM notifications WHERE doc_id = ANY($1)', [ids]);
+    const del = await query('DELETE FROM documents WHERE created_at < $1 RETURNING id', [cutoff]);
+    console.log(`[Cleanup] Deleted ${del.rowCount} expired docs (>30 days)`);
+    // Notify all clients to refresh
+    if (del.rowCount > 0) {
+      ids.forEach(docId => {
+        try { global._io?.emit('doc_update', { type: 'deleted', docId }); } catch(_) {}
+      });
+    }
+  } catch(e) { console.error('[Cleanup] Error:', e.message); }
+}
+
 // ─── Start ────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
+global._io = io; // expose io for cleanup function
 initDB()
-  .then(() => httpServer.listen(PORT, () =>
-    console.log(`✅ SendFile → http://localhost:${PORT}`)))
+  .then(() => {
+    httpServer.listen(PORT, () =>
+      console.log(`✅ SendFile → http://localhost:${PORT}`));
+    // Run cleanup immediately then every 24h
+    cleanupExpiredDocs();
+    setInterval(cleanupExpiredDocs, 24 * 60 * 60 * 1000);
+  })
   .catch(err => { console.error('DB init failed:', err); process.exit(1); });

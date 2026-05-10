@@ -32,6 +32,21 @@
     <button class="btn-primary" style="width:100%;margin-top:4px;" onclick="handleLogin()">เข้าสู่ระบบ</button>
   </div>
 
+  <!-- PASSKEY LOGIN SECTION -->
+  <div id="passkey-section" style="display:none;margin-top:16px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <div style="flex:1;height:1px;background:var(--border);"></div>
+      <span style="font-size:12px;color:var(--muted);white-space:nowrap;">─── หรือ ───</span>
+      <div style="flex:1;height:1px;background:var(--border);"></div>
+    </div>
+    <div class="form-group"><label>ชื่อผู้ใช้</label><input id="pk-username" type="text" placeholder="username" autocomplete="username"></div>
+    <div class="form-group"><label>Passkey 6 หลัก</label><input id="pk-passkey" type="number" maxlength="6" placeholder="••••••" oninput="if(this.value.length>6)this.value=this.value.slice(0,6)" style="letter-spacing:4px;font-size:18px;text-align:center;"></div>
+    <button id="pk-login-btn" class="btn-primary" style="width:100%;" onclick="handlePasskeyLogin()">เข้าสู่ระบบด้วย Passkey</button>
+  </div>
+  <div style="text-align:center;margin-top:12px;">
+    <button class="btn-outline btn-sm" style="width:100%;" onclick="togglePasskeySection()" id="passkey-toggle-btn">🔑 เข้าด้วย Passkey</button>
+  </div>
+
   <!-- REGISTER FORM -->
   <div id="form-register" style="display:none;">
     <div class="form-row">

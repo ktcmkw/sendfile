@@ -10,6 +10,7 @@ const pool = new Pool({
 async function initDB() {
   const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
   await pool.query(schema);
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_hash VARCHAR(255);');
   console.log('✅ Database initialized');
 }
 
