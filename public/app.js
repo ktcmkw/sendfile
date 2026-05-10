@@ -78,6 +78,22 @@ function showAuth() {
 
 // Socket.io — connect after DOM ready
 let _socket = null;
+// ── Polling fallback: sync every 30s to catch missed socket events ──────────
+let _pollInterval = null;
+function startPolling() {
+  if (_pollInterval) clearInterval(_pollInterval);
+  _pollInterval = setInterval(async () => {
+    if (!getCurrentUser()) return;
+    await syncFromServer();
+    updateInboxBadge(); updateNotifBadge();
+    // quietly re-render pages that show live counts
+    if (['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
+      navigate(currentPage);
+    }
+  }, 30000); // every 30 seconds
+}
+function stopPolling() { if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; } }
+
 function connectSocket(username) {
   if (typeof io === 'undefined') return; // socket.io ยังไม่โหลด — ใช้ polling แทน
   if (_socket) _socket.disconnect();
@@ -91,15 +107,18 @@ function connectSocket(username) {
         localStorage.setItem(K.docs,JSON.stringify(docs));
         updateInboxBadge(); updateNotifBadge();
         // Refresh current page if relevant
-        if(['inbox','outbox','admin','home'].includes(currentPage)) navigate(currentPage);
+        if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
+          navigate(currentPage);
       } else {
         await syncFromServer(); updateInboxBadge(); updateNotifBadge();
-        if(['inbox','outbox','admin','home'].includes(currentPage)) navigate(currentPage);
+        if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
+          navigate(currentPage);
       }
     });
     _socket.on('new_notif', async () => {
       await syncFromServer(); updateNotifBadge(); updateInboxBadge();
-      if(['inbox','outbox','home'].includes(currentPage)) navigate(currentPage);
+      if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
+        navigate(currentPage);
     });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
@@ -729,6 +748,7 @@ async function handlePasskeyLogin(){
 }
 
 function handleLogout(){
+  stopPolling();
   _jwt=null; sessionStorage.removeItem(_JWT_KEY);
   if(_socket){ _socket.disconnect(); _socket=null; }
   localStorage.removeItem(K.session);
@@ -864,6 +884,7 @@ async function receiveDocument(id,location,note=''){
   const res = await apiCall('PATCH','/api/docs/'+id+'/receive',{storageLocation:location,note});
   if(!res){ showToast('บันทึกการรับเอกสารไม่สำเร็จ','error'); return; }
   await syncFromServer(); updateInboxBadge();
+  navigate(currentPage);
 }
 
 function getInboxDocs(user){
@@ -1466,8 +1487,11 @@ function renderDocContent(doc){
   }
   return '<div class="doc-content-body"><p style="color:var(--muted)">ไม่รู้จักรูปแบบเนื้อหา</p></div>';
 }
-function renderQRViewer(docId){
-  const doc=getDocById(docId);
+async function renderQRViewer(docId){
+  if(!docId){ document.getElementById('page-body').innerHTML='<div class="empty-state"><p>ไม่พบเอกสาร</p></div>'; return; }
+  // Always fetch full doc from server (cache may be stripped)
+  let doc = await apiCall('GET','/api/docs/'+docId);
+  if(!doc) doc = getDocById(docId);
   if(!doc){ document.getElementById('page-body').innerHTML='<div class="empty-state"><p>ไม่พบเอกสาร</p></div>'; return; }
   setPageTitle('QR Code','📷');
   document.getElementById('page-actions').innerHTML=`<button class="btn-outline btn-sm" onclick="history.back?navigate('outbox'):null">← กลับ</button>`;
@@ -2100,17 +2124,15 @@ async function confirmReceive(docId){
     return;
   }
   await receiveDocument(docId,loc,note);
-  // Add receipt note as comment via API
+  // Server already adds "ยืนยันรับ" comment inside PATCH /receive — no duplicate needed
   const user=getCurrentUser();
-  await apiCall('POST','/api/docs/'+docId+'/comments',{text:'✅ ยืนยันรับเอกสาร — '+note});
-  await syncFromServer();
-  // Read updated doc for sender notification
-  const updDoc=getDocById(docId);
+  // Notify sender
+  const updDoc = await apiCall('GET','/api/docs/'+docId) || getDocById(docId);
   if(updDoc){
-    addNotif({type:'doc_received',toUsername:updDoc.senderUsername,fromUsername:user.username,
-      fromFullName:user.fullName,
-      message:user.fullName+' ยืนยันรับเอกสาร "'+updDoc.title+'" แล้ว\nบันทึก: '+note,
-      docId:docId,docTitle:updDoc.title});
+    await apiCall('POST','/api/notifs',{id:'N-'+Date.now(),type:'doc_received',
+      toUsername:updDoc.senderUsername,fromUsername:user.username,fromFullName:user.fullName,
+      message:user.fullName+' ยืนยันรับเอกสาร "'+updDoc.title+'" แล้ว',
+      docId:docId,docTitle:updDoc.title,createdAt:Date.now()});
   }
   closeModal(); showToast('รับเอกสารเรียบร้อย ✓'); renderInbox();
 }

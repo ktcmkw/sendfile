@@ -475,11 +475,11 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 }
 .mob-nav-item{
   flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:3px;color:rgba(255,255,255,0.38);font-size:10px;font-weight:500;
-  padding:4px 0;cursor:pointer;transition:color .15s;position:relative;
-  -webkit-tap-highlight-color:transparent;
+  gap:2px;color:rgba(255,255,255,0.38);font-size:9.5px;font-weight:500;
+  padding:4px 2px;cursor:pointer;transition:color .15s;position:relative;
+  -webkit-tap-highlight-color:transparent;min-width:0;
 }
-.mob-nav-item svg{width:20px;height:20px;opacity:.55;transition:opacity .15s;}
+.mob-nav-item svg{width:19px;height:19px;opacity:.55;transition:opacity .15s;}
 .mob-nav-item.active{color:#818cf8;}
 .mob-nav-item.active svg{opacity:1;}
 .mob-nav-fab{
@@ -498,6 +498,10 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   background:#f59e0b;color:#000;font-size:9px;padding:1px 5px;
   border-radius:10px;font-weight:800;min-width:16px;text-align:center;
 }
+/* Logout button in mobile bottom nav — red tint */
+.mob-nav-logout{color:rgba(239,68,68,0.55)!important;}
+.mob-nav-logout svg{opacity:.7;}
+.mob-nav-logout:active{color:rgba(239,68,68,.9)!important;}
 
 /* ── Prominent sidebar create button ─────────── */
 #nav-create{
@@ -529,7 +533,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   #sidebar.open{transform:none;}
   /* allow sb-nav to shrink so footer is always reachable */
   .sb-nav{overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0;}
-  .sb-footer{flex-shrink:0;padding-bottom:max(16px,env(safe-area-inset-bottom));}
+  .sb-footer{flex-shrink:0;padding-bottom:max(90px,calc(70px + env(safe-area-inset-bottom)));}
   #main-content{margin-left:0;padding-bottom:76px;}
   .page-header{padding:10px 14px;}
   .page-body{padding:12px 14px;}

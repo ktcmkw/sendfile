@@ -100,7 +100,7 @@ const fmtDoc = (d, stripBase64 = false) => ({
         cloudinaryPublicId: a.cloudinaryPublicId || null,
         driveId: a.driveId || null, driveUrl: a.driveUrl || null }
     : a),
-  comments: stripBase64 ? [] : (d.comments || []),
+  comments: d.comments || [],  // always include comments (small, needed for QR viewer)
   driveId: d.drive_id, driveUrl: d.drive_url,
   createdAt: Number(d.created_at), status: d.status,
   receivedAt: d.received_at ? Number(d.received_at) : null,
