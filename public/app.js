@@ -139,14 +139,18 @@ function connectSocket(username) {
         // Instant local cache update — no server round-trip needed
         const docs=getDocs().filter(d=>d.id!==data.docId);
         localStorage.setItem(K.docs,JSON.stringify(docs));
-        // Close preview if this doc was open
         if(typeof adminSelectedDoc!=='undefined' && adminSelectedDoc===data.docId) adminSelectedDoc=null;
+      } else if(data?.type==='clear_all'){
+        localStorage.setItem(K.docs, JSON.stringify([]));
+        localStorage.setItem(K.notifs, JSON.stringify([]));
       } else if(data?.doc) {
-        // Merge incoming doc directly into cache — instant UI update
+        // Merge incoming doc into cache AND sync to ensure recipient has full data
         const docs=getDocs();
         const idx=docs.findIndex(d=>d.id===data.doc.id);
         if(idx>=0) docs[idx]=data.doc; else docs.unshift(data.doc);
         localStorage.setItem(K.docs,JSON.stringify(docs));
+        // Also trigger a background sync to make sure inbox/outbox filter state is fresh
+        syncFromServer().catch(()=>{});
       } else {
         await syncFromServer();
       }
@@ -169,15 +173,7 @@ function connectSocket(username) {
       const pages=['inbox','outbox','admin','home','notifs','profile'];
       if(pages.includes(currentPage)) navigate(currentPage);
     });
-    // Handle clear_all doc event
-    _socket.on('doc_update', (data) => {
-      if(data?.type==='clear_all'){
-        localStorage.setItem(K.docs, JSON.stringify([]));
-        localStorage.setItem(K.notifs, JSON.stringify([]));
-        updateInboxBadge(); updateNotifBadge();
-        if(['inbox','outbox','admin','home','notifs'].includes(currentPage)) navigate(currentPage);
-      }
-    });
+    // clear_all handled in main doc_update handler above
     _socket.on('notifs_cleared', () => {
       localStorage.setItem(K.notifs, JSON.stringify([]));
       updateNotifBadge(); updateInboxBadge();
@@ -1334,8 +1330,8 @@ function navigate(page,params={}){
   switch(page){
     case 'home':    renderHome(); break;
     case 'create':  initWizard(); break;
-    case 'inbox':   renderInbox(); break;
-    case 'outbox':  renderOutbox(); break;
+    case 'inbox':   syncFromServer().then(()=>renderInbox()); break;
+    case 'outbox':  syncFromServer().then(()=>renderOutbox()); break;
     case 'profile': renderProfile(); break;
     case 'admin':   renderAdmin(); break;
     case 'notifs':  renderNotifs(); break;
@@ -1731,6 +1727,19 @@ let inboxFilter='all';
 function renderInbox(){
   setPageTitle('เอกสารที่ได้รับ','📥');
   const user=getCurrentUser();
+  // Fetch fresh docs from server (fixes stale cache when socket was down)
+  syncFromServer().then(()=>{
+    const u2=getCurrentUser();
+    const freshDocs=getInboxDocs(u2);
+    updateInboxBadge();
+    if(currentPage==='inbox'){
+      const pCount=freshDocs.filter(d=>d.status==='pending').length;
+      const rCount=freshDocs.filter(d=>d.status==='received').length;
+      const chips=document.querySelector('.inbox-chips');
+      const list=document.querySelector('.inbox-list-wrap');
+      if(chips||list) renderInbox(); // re-render only if still on page
+    }
+  }).catch(()=>{});
   const docs=getInboxDocs(user).sort((a,b)=>b.createdAt-a.createdAt);
   const filtered=inboxFilter==='all'?docs:inboxFilter==='pending'?docs.filter(d=>d.status==='pending'):docs.filter(d=>d.status==='received');
   const pCount=docs.filter(d=>d.status==='pending').length;

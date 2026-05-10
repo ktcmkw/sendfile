@@ -810,8 +810,7 @@ app.post('/api/admin/clear-docs', auth, admin, async (req, res) => {
     const { rows: uRows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.user.username]);
     const hash = uRows[0]?.passkey_hash;
     if (!hash) return res.status(403).json({ error: 'ยังไม่ได้ตั้ง Passkey กรุณาตั้งก่อนใช้ฟีเจอร์นี้' });
-    const bcrypt = require('bcrypt');
-    const ok = await bcrypt.compare(passkey, hash);
+    const ok = await bcrypt.compare(passkey, hash); // uses bcryptjs from top-level require
     if (!ok) return res.status(403).json({ error: 'Passkey ไม่ถูกต้อง' });
     const { rows: allDocs } = await query('SELECT attachments FROM documents');
     for (const doc of allDocs) {
@@ -836,8 +835,7 @@ app.post('/api/admin/clear-notifs', auth, admin, async (req, res) => {
     const { rows: uRows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.user.username]);
     const hash = uRows[0]?.passkey_hash;
     if (!hash) return res.status(403).json({ error: 'ยังไม่ได้ตั้ง Passkey กรุณาตั้งก่อนใช้ฟีเจอร์นี้' });
-    const bcrypt = require('bcrypt');
-    const ok = await bcrypt.compare(passkey, hash);
+    const ok = await bcrypt.compare(passkey, hash); // uses bcryptjs from top-level require
     if (!ok) return res.status(403).json({ error: 'Passkey ไม่ถูกต้อง' });
     await query('DELETE FROM notifications');
     await auditLog('clear_notifs', req.user.username, null, {}, req.ip);
