@@ -21,7 +21,7 @@ const BASE_URL = (()=>{
   if(window.location.protocol === 'file:') return 'http://localhost:8080';
   return window.location.href.replace(/[?#].*$/, '').replace(/\/$/, '');
 })();
-const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
+const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
 
 // ===================================================================
 // API LAYER — replaces localStorage writes with server calls
@@ -47,19 +47,18 @@ async function apiCall(method, path, body=null) {
 }
 
 async function syncFromServer() {
-  const [users, docs, roles, locs, notifs, gdrive] = await Promise.all([
-    apiCall('GET','/api/users'), apiCall('GET','/api/docs'),
-    apiCall('GET','/api/roles'), apiCall('GET','/api/locations'),
-    apiCall('GET','/api/notifs'), apiCall('GET','/api/settings/gdrive'),
-  ]);
+  // Single /api/sync call replaces 6 separate API calls — much faster
+  const data = await apiCall('GET', '/api/sync');
+  if (!data) return;
   const isArr = v => Array.isArray(v);
   const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
-  if (isArr(users))  localStorage.setItem(K.users,  JSON.stringify(users));
-  if (isArr(docs))   localStorage.setItem(K.docs,   JSON.stringify(docs));
-  if (isArr(roles))  localStorage.setItem(K.roles,  JSON.stringify(roles));
-  if (isArr(locs))   localStorage.setItem(K.locs,   JSON.stringify(locs));
-  if (isArr(notifs)) localStorage.setItem(K.notifs, JSON.stringify(notifs));
-  if (isObj(gdrive) || isArr(gdrive)) localStorage.setItem(K.gdrive, JSON.stringify(gdrive));
+  if (isArr(data.users))     localStorage.setItem(K.users,  JSON.stringify(data.users));
+  if (isArr(data.docs))      localStorage.setItem(K.docs,   JSON.stringify(data.docs));
+  if (isArr(data.roles))     localStorage.setItem(K.roles,  JSON.stringify(data.roles));
+  if (isArr(data.locations))   localStorage.setItem(K.locs,   JSON.stringify(data.locations));
+  if (isArr(data.departments)) localStorage.setItem(K.depts,  JSON.stringify(data.departments));
+  if (isArr(data.notifs))      localStorage.setItem(K.notifs, JSON.stringify(data.notifs));
+  if (isObj(data.gdrive) || isArr(data.gdrive)) localStorage.setItem(K.gdrive, JSON.stringify(data.gdrive));
 }
 
 // Fire-and-forget API sync — never blocks UI
@@ -78,7 +77,7 @@ function showAuth() {
 
 // Socket.io — connect after DOM ready
 let _socket = null;
-// ── Polling fallback: sync every 8s to catch missed socket events ──────────
+// ── Polling fallback: sync every 3s (fast — /api/sync is 1 call now) ───────
 let _pollInterval = null;
 function startPolling() {
   if (_pollInterval) clearInterval(_pollInterval);
@@ -90,7 +89,7 @@ function startPolling() {
     if (['home','inbox','outbox','admin','notifs'].includes(currentPage)) {
       navigate(currentPage);
     }
-  }, 8000); // every 8 seconds
+  }, 3000); // every 3 seconds — fast polling fallback
 }
 function stopPolling() { if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; } }
 
@@ -137,23 +136,34 @@ function connectSocket(username) {
 
     _socket.on('doc_update', async (data) => {
       if(data?.type==='deleted'){
-        // Remove deleted doc from local cache immediately
+        // Instant local cache update — no server call needed
         const docs=getDocs().filter(d=>d.id!==data.docId);
         localStorage.setItem(K.docs,JSON.stringify(docs));
-        updateInboxBadge(); updateNotifBadge();
-        // Refresh current page if relevant
-        if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
-          navigate(currentPage);
+      } else if(data?.doc) {
+        // Merge incoming doc directly into cache — instant UI update
+        const docs=getDocs();
+        const idx=docs.findIndex(d=>d.id===data.doc.id);
+        if(idx>=0) docs[idx]=data.doc; else docs.unshift(data.doc);
+        localStorage.setItem(K.docs,JSON.stringify(docs));
       } else {
-        await syncFromServer(); updateInboxBadge(); updateNotifBadge();
-        if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
-          navigate(currentPage);
+        await syncFromServer();
       }
+      updateInboxBadge(); updateNotifBadge();
+      const pages=['inbox','outbox','admin','home','notifs','profile'];
+      if(pages.includes(currentPage)) navigate(currentPage);
     });
-    _socket.on('new_notif', async () => {
-      await syncFromServer(); updateNotifBadge(); updateInboxBadge();
-      if(['inbox','outbox','admin','home','notifs','profile'].includes(currentPage))
-        navigate(currentPage);
+    _socket.on('new_notif', async (notif) => {
+      // Merge notification into cache instantly
+      if(notif) {
+        const notifs=getNotifs();
+        if(!notifs.find(n=>n.id===notif.id)) notifs.unshift(notif);
+        localStorage.setItem(K.notifs,JSON.stringify(notifs));
+      } else {
+        await syncFromServer();
+      }
+      updateNotifBadge(); updateInboxBadge();
+      const pages=['inbox','outbox','admin','home','notifs','profile'];
+      if(pages.includes(currentPage)) navigate(currentPage);
     });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
@@ -232,6 +242,10 @@ function getLocations(){
   let locs=store.get(K.locs);
   if(!locs||locs.length===0){ locs=['สำนักงาน','ตู้ A-1','ตู้ A-2','ตู้ A-3','กล่อง B-1','กล่อง B-2']; store.set(K.locs,locs); }
   return locs;
+}
+function getDepartments(){
+  const d=store.get(K.depts);
+  return d&&d.length>0 ? d : ['บริหาร','ขาย','บัญชี','สโตร์','ฝ่ายบุคคล','ช่าง','พนักงานทั่วไป'];
 }
 
 // ===================================================================
@@ -554,8 +568,8 @@ async function markAllNotifsRead(){
   await apiCall('PATCH','/api/notifs/read-all');
   await syncFromServer(); updateNotifBadge();
 }
-function notifIcon(type){return{admin_broadcast:'📢',doc_sent:'📨',doc_received:'✅',system:'ℹ️'}[type]||'🔔';}
-function notifTypeLabel(type){return{admin_broadcast:'ประกาศจาก Admin',doc_sent:'ได้รับเอกสารใหม่',doc_received:'ผู้รับยืนยันรับแล้ว',system:'แจ้งเตือนระบบ'}[type]||'แจ้งเตือน';}
+function notifIcon(type){return{admin_broadcast:'📢',doc_sent:'📨',doc_sent_log:'📤',doc_received:'✅',doc_received_log:'📥',doc_deleted:'🗑️',system:'ℹ️'}[type]||'🔔';}
+function notifTypeLabel(type){return{admin_broadcast:'ประกาศจาก Admin',doc_sent:'ได้รับเอกสารใหม่',doc_sent_log:'คุณส่งเอกสาร',doc_received:'ผู้รับยืนยันรับแล้ว',doc_received_log:'คุณรับเอกสาร',doc_deleted:'เอกสารถูกลบ',system:'แจ้งเตือนระบบ'}[type]||'แจ้งเตือน';}
 
 function renderNotifs(){
   setPageTitle('กล่องจดหมาย','🔔');
@@ -608,36 +622,159 @@ function canPreviewDocs(u){
 }
 
 async function openDocPreviewModal(docId){
-  // GET /api/docs list strips content+base64 to save localStorage space.
-  // Always fetch the full doc from server before rendering preview.
   let doc = await apiCall('GET', '/api/docs/'+docId);
-  if(!doc) doc = getDocById(docId); // fallback to cache
+  if(!doc) doc = getDocById(docId);
   if(!doc) return;
-  const attHtml=doc.attachments&&doc.attachments.length>0?`
-    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+
+  // ── Avatar initials helper ────────────────────────────────────────────────
+  function avatarHtml(name, color='blue'){
+    const init=(name||'?').split(' ').map(w=>w[0]).filter(Boolean).join('').slice(0,2).toUpperCase();
+    const bg={blue:'#6366f1',green:'#10b981',amber:'#f59e0b',red:'#ef4444',muted:'#94a3b8'}[color]||'#6366f1';
+    return `<span class="tl-avatar" style="background:${bg};">${init}</span>`;
+  }
+  // ── Format date/time split ────────────────────────────────────────────────
+  function fmtDT(ts){
+    if(!ts) return '';
+    const d=new Date(ts);
+    const date=`${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getFullYear()+543}`;
+    const time=`${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+    return `<span class="tl-date-row"><span class="tl-date-icon">📅</span>${date}<span class="tl-date-icon" style="margin-left:8px;">🕐</span>${time}</span>`;
+  }
+
+  // ── Build timeline steps ──────────────────────────────────────────────────
+  const received = doc.status === 'received';
+  const comments = doc.comments || [];
+
+  // Collect timeline events: created, [comments], received
+  const events = [];
+
+  // Step 1: ส่งเอกสาร (always done)
+  events.push({
+    state: 'done',
+    title: 'ส่งเอกสาร',
+    dept:  escapeHtml(doc.senderDepartment || ''),
+    name:  escapeHtml(doc.senderFullName || ''),
+    color: 'blue',
+    note:  `รหัส: <code style="font-size:11px;color:var(--blue)">${escapeHtml(doc.id)}</code> · ${priorityBadge(doc.priority)}`,
+    ts:    doc.createdAt
+  });
+
+  // Step 2: ผู้รับได้รับการแจ้งเตือน (always done once sent)
+  const recipientName = doc.recipientFullName || doc.recipientDepartment || '—';
+  events.push({
+    state: 'done',
+    title: 'แจ้งผู้รับ',
+    dept:  doc.recipientType==='department' ? '(ทั้งแผนก)' : '',
+    name:  escapeHtml(recipientName),
+    color: 'amber',
+    note:  '',
+    ts:    doc.createdAt
+  });
+
+  // Intermediate comments (filter out the auto "ยืนยันรับเอกสาร" one)
+  const midComments = comments.filter(c => !c.text.startsWith('✅ ยืนยันรับเอกสาร'));
+  midComments.forEach(c => {
+    events.push({
+      state: 'done',
+      title: 'ความคิดเห็น',
+      dept:  '',
+      name:  escapeHtml(c.fullName || c.username || ''),
+      color: 'muted',
+      note:  `<em style="color:var(--text);">"${escapeHtml(c.text)}"</em>`,
+      ts:    c.createdAt
+    });
+  });
+
+  // Step 3: รับเอกสาร
+  if(received){
+    const recComment = comments.find(c => c.text.startsWith('✅ ยืนยันรับเอกสาร'));
+    const note2 = recComment ? `<em>"${escapeHtml(recComment.text)}"</em>` : '';
+    events.push({
+      state: 'done',
+      title: 'รับเอกสารแล้ว',
+      dept:  doc.storageLocation ? `📦 เก็บที่: ${escapeHtml(doc.storageLocation)}` : '',
+      name:  escapeHtml(doc.receivedBy || recipientName),
+      color: 'green',
+      note:  note2,
+      ts:    doc.receivedAt
+    });
+  } else {
+    events.push({
+      state: 'active',
+      title: 'รอรับเอกสาร',
+      dept:  '',
+      name:  escapeHtml(recipientName),
+      color: 'amber',
+      note:  '<span style="font-size:11px;color:var(--muted);">ยังไม่ได้รับการยืนยัน</span>',
+      ts:    null
+    });
+  }
+
+  const timelineHtml = `<div class="doc-timeline">` +
+    events.map((ev, i) => {
+      const isLast = i === events.length - 1;
+      const dotHtml = ev.state === 'done'
+        ? `<div class="tl-dot tl-done-dot"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20,6 9,17 4,12"/></svg></div>`
+        : `<div class="tl-dot tl-active-dot"><div class="tl-dot-inner"></div></div>`;
+      return `<div class="tl-step${ev.state==='active'?' tl-step-active':''}">
+        <div class="tl-node">
+          ${dotHtml}
+          ${!isLast?'<div class="tl-line"></div>':''}
+        </div>
+        <div class="tl-body">
+          <div class="tl-title">${ev.title}</div>
+          ${ev.dept?`<div class="tl-dept">${ev.dept}</div>`:''}
+          <div class="tl-person">${avatarHtml(ev.name,ev.color)} <span>${ev.name}</span></div>
+          ${ev.note?`<div class="tl-note">${ev.note}</div>`:''}
+          ${ev.ts?fmtDT(ev.ts):''}
+        </div>
+      </div>`;
+    }).join('') + `</div>`;
+
+  // ── Attachments ───────────────────────────────────────────────────────────
+  const attHtml = doc.attachments?.length ? `
+    <div class="preview-section-block">
       <div class="preview-section-label">📎 ไฟล์แนบ (${doc.attachments.length})</div>
-      <div class="attachment-list">${doc.attachments.map(a=>{const u=a.cloudinaryUrl||a.base64||a.driveUrl||'#';const extra=a.cloudinaryUrl||a.base64?`download="${escapeHtml(a.name)}"`:' target="_blank"';return`<div class="attachment-item"><span class="att-icon">${fileTypeIcon(a.name)}</span><span class="att-name">${escapeHtml(a.name)}</span><span class="att-size">${formatFileSize(a.size)}</span><a class="att-view" href="${escapeHtml(u)}" ${extra}>⬇</a></div>`;}).join('')}</div>
-    </div>`:'';
-  const cmtCount=(doc.comments||[]).length;
-  const content=`<div class="modal-scroll-body">
-    <div class="preview-meta-grid">
-      <div class="preview-meta-row"><span class="preview-label">รหัส</span><code style="font-size:11px;color:var(--blue)">${doc.id}</code></div>
-      <div class="preview-meta-row"><span class="preview-label">ความเร่งด่วน</span>${priorityBadge(doc.priority)}</div>
-      <div class="preview-meta-row"><span class="preview-label">จาก</span><span>${escapeHtml(doc.senderFullName)} · ${escapeHtml(doc.senderDepartment)}</span></div>
-      <div class="preview-meta-row"><span class="preview-label">ถึง</span><span>${escapeHtml(doc.recipientFullName||doc.recipientDepartment||'')}</span></div>
-      <div class="preview-meta-row"><span class="preview-label">ส่งเมื่อ</span><span>${formatDate(doc.createdAt)}</span></div>
-      <div class="preview-meta-row"><span class="preview-label">สถานะ</span>${doc.status==='received'?'<span class="badge badge-received">รับแล้ว ✓</span>':'<span class="badge badge-pending">รอรับ</span>'}</div>
+      <div class="attachment-list">${doc.attachments.map(a=>{
+        const u=a.cloudinaryUrl||a.base64||a.driveUrl||'#';
+        const extra=a.cloudinaryUrl||a.base64?`download="${escapeHtml(a.name)}"`:' target="_blank"';
+        return `<div class="attachment-item"><span class="att-icon">${fileTypeIcon(a.name)}</span><span class="att-name">${escapeHtml(a.name)}</span><span class="att-size">${formatFileSize(a.size)}</span><a class="att-view" href="${escapeHtml(u)}" ${extra}>⬇</a></div>`;
+      }).join('')}</div>
+    </div>` : '';
+
+  // ── Tabs layout ───────────────────────────────────────────────────────────
+  const modalContent = `<div class="modal-scroll-body">
+    <div class="preview-tabs">
+      <button class="prev-tab active" onclick="switchPreviewTab('status',this)">📍 สถานะ</button>
+      <button class="prev-tab" onclick="switchPreviewTab('content',this)">📄 เนื้อหา</button>
     </div>
-    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
-      <div class="preview-section-label">📄 เนื้อหาเอกสาร</div>
-      ${renderDocContent(doc)}
+    <div id="ptab-status">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:12px 0 8px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);margin-bottom:14px;">
+        <span>📋 <strong style="color:var(--text);">${escapeHtml(doc.id)}</strong></span>
+        <span>${priorityBadge(doc.priority)}</span>
+        <span>${received?'<span class="badge badge-received">รับแล้ว ✓</span>':'<span class="badge badge-pending">รอรับ</span>'}</span>
+      </div>
+      ${timelineHtml}
     </div>
-    ${attHtml}
-    ${cmtCount>0?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><div class="preview-section-label">💬 ความคิดเห็น (${cmtCount})</div><div style="font-size:13px;color:var(--muted);padding:6px 0;">มี ${cmtCount} ความคิดเห็น — <a href="#" style="color:var(--blue)" onclick="closeModal();navigate('qr',{docId:'${doc.id}'});return false;">คลิกเพื่อดูและตอบกลับ</a></div></div>`:''}
+    <div id="ptab-content" style="display:none;">
+      <div class="preview-section-block">
+        <div class="preview-section-label">📄 เนื้อหาเอกสาร</div>
+        ${renderDocContent(doc)}
+      </div>
+      ${attHtml}
+    </div>
   </div>`;
-  openModal(escapeHtml(doc.title),content,
+
+  openModal(escapeHtml(doc.title), modalContent,
     `<button class="btn-outline" onclick="closeModal()">ปิด</button>
-     <button class="btn-primary" onclick="closeModal();navigate('qr',{docId:'${doc.id}'})">🔗 ดูเต็ม / QR →</button>`,'lg');
+     <button class="btn-primary" onclick="closeModal();navigate('qr',{docId:'${doc.id}'})">🔗 ดูเต็ม / QR →</button>`, 'lg');
+}
+
+function switchPreviewTab(tab, btn){
+  document.querySelectorAll('.prev-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('ptab-status').style.display = tab==='status'?'':'none';
+  document.getElementById('ptab-content').style.display = tab==='content'?'':'none';
 }
 
 function openStatModal(type){
@@ -835,6 +972,22 @@ function switchTab(tab){
     pkSec.style.display='none';
     loginForm.style.display='none';
     regForm.style.display='block';
+    // Populate department dropdown from cache
+    const deptSel=document.getElementById('r-dept');
+    if(deptSel){
+      const depts=getDepartments();
+      const cur=deptSel.value;
+      deptSel.innerHTML=`<option value="">-- เลือกแผนก --</option>`+
+        depts.map(d=>`<option value="${escapeHtml(d)}"${cur===d?' selected':''}>${escapeHtml(d)}</option>`).join('');
+    }
+    // Populate location dropdown from cache
+    const locSel=document.getElementById('r-location');
+    if(locSel){
+      const locs=getLocations();
+      const curL=locSel.value;
+      locSel.innerHTML=`<option value="">-- เลือกสถานที่ --</option>`+
+        locs.map(l=>`<option value="${escapeHtml(l)}"${curL===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
+    }
   }
   document.getElementById('tab-login').className='tab-btn'+(tab==='login'?' active':'');
   document.getElementById('tab-register').className='tab-btn'+(tab==='register'?' active':'');
@@ -927,10 +1080,10 @@ async function createDocument(data){
   (async () => {
     const allU = getUsers();
     if(doc.recipientType==='user'&&doc.recipientUsername){
-      await apiCall('POST','/api/notifs',{id:'N-'+Date.now(),type:'doc_sent',toUsername:doc.recipientUsername,fromUsername:user.username,fromFullName:user.fullName,message:user.fullName+' ส่งเอกสาร "'+doc.title+'" ให้คุณ',docId:doc.id,docTitle:doc.title,createdAt:Date.now()});
+      // Notification now created server-side in POST /api/docs
     } else if(doc.recipientType==='department'&&doc.recipientDepartment){
       for(const u2 of allU.filter(u=>u.department===doc.recipientDepartment&&u.username!==user.username)){
-        await apiCall('POST','/api/notifs',{id:'N-'+Date.now()+u2.username,type:'doc_sent',toUsername:u2.username,fromUsername:user.username,fromFullName:user.fullName,message:user.fullName+' ส่งเอกสาร "'+doc.title+'" ให้แผนก '+doc.recipientDepartment,docId:doc.id,docTitle:doc.title,createdAt:Date.now()});
+        // Notification now created server-side
       }
     }
     await syncFromServer();
@@ -1286,7 +1439,7 @@ function renderWizard(){
     <div style="display:flex;justify-content:flex-end;margin-top:16px;"><button class="btn-primary" onclick="wzNext()">ถัดไป: เลือกผู้รับ →</button></div>`;
   } else if(wz.step===2){
     const users=getUsers().filter(u=>u.username!==getCurrentUser().username);
-    const depts=[...new Set(users.map(u=>u.department))];
+    const depts=getDepartments(); // use admin-managed department list
     const userOpts=users.map(u=>`<option value="user:${escapeHtml(u.username)}" ${wz.recipient==='user:'+u.username?'selected':''}>${escapeHtml(u.fullName)} (${escapeHtml(u.department)})</option>`).join('');
     const deptOpts=depts.map(d=>`<option value="dept:${escapeHtml(d)}" ${wz.recipient==='dept:'+d?'selected':''}>${escapeHtml(d)} (ทั้งแผนก)</option>`).join('');
     body=`
@@ -1693,8 +1846,8 @@ function renderAdmin(){
 }
 function renderAdminTab(tab){
   adminTab=tab;
-  const tabs=['members','docs','roles','settings'];
-  const labels=['สมาชิก','เอกสาร','บทบาท','ตั้งค่า'];
+  const tabs=['members','docs','roles','storage','settings'];
+  const labels=['สมาชิก','เอกสาร','บทบาท','แผนก/จัดเก็บ','ตั้งค่า'];
   const tabBar=tabs.map((t,i)=>`<div class="admin-tab${t===tab?' active':''}" onclick="renderAdminTab('${t}')">${labels[i]}</div>`).join('');
   let content='';
   if(tab==='members'){
@@ -1806,6 +1959,45 @@ function renderAdminTab(tab){
       <button class="btn-primary btn-sm" onclick="openAddRoleModal()">+ สร้างบทบาทใหม่</button>
     </div>
     <div class="role-list">${roleCardsHtml}</div>`;
+  } else if(tab==='storage'){
+    const locs=getLocations();
+    const depts=getDepartments();
+    // Locations section
+    const locsHtml=locs.map(l=>`<div class="loc-row">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><rect x="2" y="7" width="20" height="14" rx="2"/><polyline points="16,2 12,7 8,2"/></svg>
+      <span class="loc-name" style="flex:1;font-size:13px;">${escapeHtml(l)}</span>
+      <input class="loc-input" type="text" value="${escapeHtml(l)}" style="display:none;flex:1;padding:4px 8px;border:1px solid var(--blue);border-radius:6px;font-size:13px;background:var(--white);color:var(--text);" onkeydown="if(event.key==='Enter')confirmRename(this,'${escapeHtml(l)}');if(event.key==='Escape')cancelRename(this,'${escapeHtml(l)}')">
+      <div class="loc-actions">
+        <button class="btn-icon loc-edit-btn" onclick="startRename(this,'${escapeHtml(l)}')">✏️</button>
+        <button class="btn-icon loc-save-btn" style="display:none;color:var(--green)" onclick="confirmRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✅</button>
+        <button class="btn-icon loc-cancel-btn" style="display:none;" onclick="cancelRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✕</button>
+        <button class="btn-icon" style="color:var(--red)" onclick="removeLocation('${escapeHtml(l)}')">🗑</button>
+      </div>
+    </div>`).join('');
+    // Departments section
+    const deptsHtml=depts.map(d=>`<div class="loc-row" id="dept-row-${btoa(encodeURIComponent(d)).replace(/=/g,'')}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+      <span class="loc-name" style="flex:1;font-size:13px;">${escapeHtml(d)}</span>
+      <input class="loc-input" type="text" value="${escapeHtml(d)}" style="display:none;flex:1;padding:4px 8px;border:1px solid var(--blue);border-radius:6px;font-size:13px;background:var(--white);color:var(--text);" onkeydown="if(event.key==='Enter')confirmRenameDept(this,'${escapeHtml(d)}');if(event.key==='Escape')cancelRename(this,'${escapeHtml(d)}')">
+      <div class="loc-actions">
+        <button class="btn-icon loc-edit-btn" onclick="startRename(this,'${escapeHtml(d)}')">✏️</button>
+        <button class="btn-icon loc-save-btn" style="display:none;color:var(--green)" onclick="confirmRenameDept(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(d)}')">✅</button>
+        <button class="btn-icon loc-cancel-btn" style="display:none;" onclick="cancelRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(d)}')">✕</button>
+        <button class="btn-icon" style="color:var(--red)" onclick="removeDept('${escapeHtml(d)}')">🗑</button>
+      </div>
+    </div>`).join('');
+    content=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;">
+      <div class="card-section">
+        <div class="card-section-header">📦 สถานที่จัดเก็บเอกสาร <button class="btn-primary btn-sm" onclick="addLocation()">+ เพิ่ม</button></div>
+        <div class="card-section-body" id="loc-list">${locsHtml}</div>
+      </div>
+      <div class="card-section">
+        <div class="card-section-header">🏢 แผนก <button class="btn-primary btn-sm" onclick="addDept()">+ เพิ่ม</button></div>
+        <div class="card-section-body" id="dept-list">${deptsHtml}
+          <div style="font-size:11px;color:var(--muted);margin-top:8px;">⚠️ การเปลี่ยนชื่อแผนกไม่ได้อัปเดตข้อมูล user เดิมโดยอัตโนมัติ</div>
+        </div>
+      </div>
+    </div>`;
   } else if(tab==='settings'){
     const locs=getLocations();
     const gd=getGDriveConfig();
@@ -1853,20 +2045,7 @@ function renderAdminTab(tab){
         <button class="btn-outline btn-sm" style="margin-top:10px;" onclick="checkEmailStatus()">🔄 ตรวจสอบสถานะ</button>
       </div>
     </div>
-    <div class="card-section"><div class="card-section-header">สถานที่จัดเก็บเอกสาร <button class="btn-primary btn-sm" onclick="addLocation()">+ เพิ่ม</button></div>
-    <div class="card-section-body" id="loc-list">
-    ${locs.map((l)=>`<div class="loc-row" id="loc-row-${btoa(encodeURIComponent(l)).replace(/=/g,'')}">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><rect x="2" y="7" width="20" height="14" rx="2"/><polyline points="16,2 12,7 8,2"/></svg>
-      <span class="loc-name" style="flex:1;font-size:13px;">${escapeHtml(l)}</span>
-      <input class="loc-input" type="text" value="${escapeHtml(l)}" style="display:none;flex:1;padding:4px 8px;border:1px solid var(--blue);border-radius:6px;font-size:13px;background:var(--white);color:var(--text);" onkeydown="if(event.key==='Enter')confirmRename(this,'${escapeHtml(l)}');if(event.key==='Escape')cancelRename(this,'${escapeHtml(l)}')">
-      <div class="loc-actions">
-        <button class="btn-icon loc-edit-btn" title="แก้ไขชื่อ" onclick="startRename(this,'${escapeHtml(l)}')">✏️</button>
-        <button class="btn-icon loc-save-btn" title="บันทึก" style="display:none;color:var(--green)" onclick="confirmRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✅</button>
-        <button class="btn-icon loc-cancel-btn" title="ยกเลิก" style="display:none;" onclick="cancelRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✕</button>
-        <button class="btn-icon" style="color:var(--red)" title="ลบ" onclick="removeLocation('${escapeHtml(l)}')">🗑</button>
-      </div>
-    </div>`).join('')}
-    </div></div>`;
+    `;
   }
   document.getElementById('page-body').innerHTML=`<div class="admin-tabs">${tabBar}</div>${content}`;
   if(tab==='settings') setTimeout(checkEmailStatus, 100);
@@ -1939,7 +2118,7 @@ function renderUserDetailPanel(username){
       <div class="udp-section">
         <div class="udp-section-title">🏢 แผนก & สิทธิ์</div>
         <div class="udp-grid">
-          <div class="form-group"><label>แผนก</label><input id="edit-dept" type="text" value="${escapeHtml(u.department)}"></div>
+          <div class="form-group"><label>แผนก</label><select id="edit-dept" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${getDepartments().map(d=>`<option value="${escapeHtml(d)}" ${u.department===d?'selected':''}>${escapeHtml(d)}</option>`).join('')}</select></div>
           <div class="form-group"><label>สถานที่</label><select id="edit-location">${locOpts}</select></div>
           <div class="form-group"><label>Role</label><select id="edit-role"${isSelf?' disabled':''}>${roleOpts}</select></div>
         </div>
@@ -2034,9 +2213,29 @@ async function deleteMember(username){
   if(adminSelectedUser===username) adminSelectedUser=null;
   renderAdminTab('members'); showToast('ลบบัญชีแล้ว');
 }
-async function addLocation(){ const n=prompt('ชื่อสถานที่จัดเก็บ:',''); if(!n||!n.trim())return; const res=await apiCall('POST','/api/locations',{name:n.trim()}); if(res?.ok){await syncFromServer();renderAdminTab('settings');showToast('เพิ่มสถานที่แล้ว');}else{showToast(res?.error||'เพิ่มไม่สำเร็จ','error');}}
+async function addDept(){
+  const name=(prompt('ชื่อแผนกใหม่:','')||'').trim();
+  if(!name) return;
+  const res=await apiCall('POST','/api/departments',{name});
+  if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('เพิ่มแผนกแล้ว');}
+  else showToast(res?.error||'เพิ่มไม่สำเร็จ','error');
+}
+async function confirmRenameDept(input, oldName){
+  const newName=(input.value||'').trim();
+  if(!newName||newName===oldName){cancelRename(input,oldName);return;}
+  const res=await apiCall('PUT','/api/departments/'+encodeURIComponent(oldName),{name:newName});
+  if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('เปลี่ยนชื่อแล้ว');}
+  else showToast(res?.error||'แก้ไขไม่สำเร็จ','error');
+}
+async function removeDept(name){
+  if(!confirm('ลบแผนก "'+name+'"? \nUser ที่อยู่ในแผนกนี้จะยังคงมีค่าแผนกเดิม')) return;
+  const res=await apiCall('DELETE','/api/departments/'+encodeURIComponent(name));
+  if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('ลบแผนกแล้ว');}
+  else showToast(res?.error||'ลบไม่สำเร็จ','error');
+}
+async function addLocation(){ const n=prompt('ชื่อสถานที่จัดเก็บ:',''); if(!n||!n.trim())return; const res=await apiCall('POST','/api/locations',{name:n.trim()}); if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('เพิ่มสถานที่แล้ว');}else{showToast(res?.error||'เพิ่มไม่สำเร็จ','error');}}
 async function removeLocation(name){ if(!confirm(`ลบ "${name}" ?
-เอกสารที่เก็บที่นี่จะยังคงอยู่`))return; const res=await apiCall('DELETE','/api/locations/'+encodeURIComponent(name)); if(res?.ok){await syncFromServer();renderAdminTab('settings');showToast('ลบสถานที่แล้ว');}else{showToast('ลบไม่สำเร็จ','error');}}
+เอกสารที่เก็บที่นี่จะยังคงอยู่`))return; const res=await apiCall('DELETE','/api/locations/'+encodeURIComponent(name)); if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('ลบสถานที่แล้ว');}else{showToast('ลบไม่สำเร็จ','error');}}
 
 // ─── Location inline rename helpers ───────────────────────────────
 function startRename(btn, oldName){
@@ -2160,7 +2359,7 @@ function openAddMemberModal(){
     <div class="form-group"><label>อีเมล *</label><input id="am-email" type="email" placeholder="name@company.com"></div>
     <div class="form-group"><label>ชื่อ-นามสกุล *</label><input id="am-fullname" type="text" placeholder="สมชาย มั่นคง"></div>
     <div class="form-row">
-      <div class="form-group"><label>แผนก *</label><input id="am-dept" type="text" placeholder="เช่น IT, การเงิน"></div>
+      <div class="form-group"><label>แผนก *</label><select id="am-dept" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${getDepartments().map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select></div>
       <div class="form-group"><label>สถานที่ *</label><select id="am-loc">${locOpts}</select></div>
     </div>
     <div class="form-row">
@@ -2241,10 +2440,7 @@ async function confirmReceive(docId){
   // Notify sender
   const updDoc = await apiCall('GET','/api/docs/'+docId) || getDocById(docId);
   if(updDoc){
-    await apiCall('POST','/api/notifs',{id:'N-'+Date.now(),type:'doc_received',
-      toUsername:updDoc.senderUsername,fromUsername:user.username,fromFullName:user.fullName,
-      message:user.fullName+' ยืนยันรับเอกสาร "'+updDoc.title+'" แล้ว',
-      docId:docId,docTitle:updDoc.title,createdAt:Date.now()});
+    // doc_received notification now created server-side
   }
   closeModal(); showToast('รับเอกสารเรียบร้อย ✓'); renderInbox();
 }

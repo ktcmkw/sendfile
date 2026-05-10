@@ -85,6 +85,22 @@ async function admin(req, res, next) {
 }
 function tok(username) { return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '8h' }); }
 
+// ─── Server-side notification helper ─────────────────────────────────────────
+async function pushNotif(io, { type, toUsername, fromUsername, fromFullName, message, docId, docTitle }) {
+  const id = 'N-' + Date.now() + '-' + Math.random().toString(36).slice(2,5);
+  const now = Date.now();
+  try {
+    await query(
+      `INSERT INTO notifications (id,type,to_username,from_username,from_full_name,message,doc_id,doc_title,created_at,read)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,false)`,
+      [id, type, toUsername, fromUsername||'system', fromFullName||'ระบบ', message, docId||null, docTitle||null, now]
+    );
+    const notif = { id, type, toUsername, fromUsername, fromFullName, message, docId, docTitle, createdAt: now, read: false };
+    const room  = toUsername === '__all__' ? 'broadcast' : toUsername;
+    io.to(room).emit('new_notif', notif);
+  } catch(e) { console.error('[pushNotif]', e.message); }
+}
+
 // ─── Format helpers ───────────────────────────────────────────────────────────
 const fmtUser = u => ({
   username: u.username, fullName: u.full_name, email: u.email,
@@ -263,6 +279,12 @@ app.put('/api/users/:username', auth, admin, async (req, res) => {
         [fullName, email, department, location, role, uname]);
     }
     await auditLog('user_edit', req.user.username, uname, { fullName, role }, req.ip);
+    // Notify user if their password was changed by admin
+    if (password?.length >= 4 && uname !== req.user.username) {
+      await pushNotif(req.io, { type:'system', toUsername: uname,
+        fromUsername: req.user.username, fromFullName: req.user.full_name || 'Admin',
+        message: `รหัสผ่านของคุณถูกเปลี่ยนแปลงโดย ${req.user.full_name || req.user.username}` });
+    }
     const { rows } = await query('SELECT * FROM users WHERE username=$1', [uname]);
     res.json(fmtUser(rows[0]));
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -353,7 +375,16 @@ app.post('/api/docs', auth, async (req, res) => {
     await auditLog('doc_create', req.user.username, d.id, { title: d.title }, req.ip);
     const { rows } = await query('SELECT * FROM documents WHERE id=$1', [d.id]);
     const doc = fmtDoc(rows[0]);
-    req.io.emit('doc_update', { type: 'created', doc });
+    // Emit to sender and recipient only (not broadcast to everyone)
+    const senderRoom   = d.senderUsername;
+    const recipientRoom = d.recipientType === 'user' ? d.recipientUsername : ('dept:' + d.recipientDepartment);
+    req.io.to(senderRoom).emit('doc_update', { type: 'created', doc });
+    if (d.recipientType === 'user' && d.recipientUsername) {
+      req.io.to(d.recipientUsername).emit('doc_update', { type: 'created', doc });
+    } else if (d.recipientType === 'department') {
+      req.io.to('dept:' + d.recipientDepartment).emit('doc_update', { type: 'created', doc });
+    }
+    req.io.to('role:admin').emit('doc_update', { type: 'created', doc });
     // Send email notification to recipient(s)
     const origin = req.headers.origin || `https://${req.headers.host}`;
     if (d.recipientType === 'user' && d.recipientUsername) {
@@ -363,6 +394,23 @@ app.post('/api/docs', auth, async (req, res) => {
       const { rows: deptUsers } = await query('SELECT email,full_name FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, d.senderUsername]);
       for (const u of deptUsers) {
         if (u.email) sendDocEmail(u.email, u.full_name, doc.senderFullName, doc, origin);
+      }
+    }
+    // ── Server-side notifications (sender log + recipient alert) ──────────────
+    const base = { fromUsername: doc.senderUsername, fromFullName: doc.senderFullName, docId: doc.id, docTitle: doc.title };
+    // Notify sender (self-log)
+    await pushNotif(req.io, { ...base, type:'doc_sent_log', toUsername: doc.senderUsername,
+      message: `คุณส่งเอกสาร "${doc.title}" ไปยัง ${doc.recipientFullName||doc.recipientDepartment||''}` });
+    // Notify recipient(s)
+    if (d.recipientType === 'user' && d.recipientUsername) {
+      await pushNotif(req.io, { ...base, type:'doc_sent', toUsername: d.recipientUsername,
+        message: `${doc.senderFullName} ส่งเอกสาร "${doc.title}" ให้คุณ` });
+    } else if (d.recipientType === 'department') {
+      const { rows: deptU } = await query(
+        'SELECT username FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, d.senderUsername]);
+      for (const u of deptU) {
+        await pushNotif(req.io, { ...base, type:'doc_sent', toUsername: u.username,
+          message: `${doc.senderFullName} ส่งเอกสาร "${doc.title}" ให้แผนก ${d.recipientDepartment}` });
       }
     }
     res.json(doc);
@@ -384,7 +432,17 @@ app.patch('/api/docs/:id/receive', auth, async (req, res) => {
     await auditLog('doc_receive', u.username, req.params.id, { storageLocation }, req.ip);
     const { rows } = await query('SELECT * FROM documents WHERE id=$1', [req.params.id]);
     const doc = fmtDoc(rows[0]);
-    req.io.emit('doc_update', { type: 'received', doc });
+    req.io.to(doc.senderUsername).emit('doc_update', { type: 'received', doc });
+    req.io.to(u.username).emit('doc_update', { type: 'received', doc });
+    req.io.to('role:admin').emit('doc_update', { type: 'received', doc });
+    // Notify sender that doc was received
+    await pushNotif(req.io, { type:'doc_received', toUsername: doc.senderUsername,
+      fromUsername: u.username, fromFullName: u.full_name, docId: doc.id, docTitle: doc.title,
+      message: `${u.full_name} ยืนยันรับเอกสาร "${doc.title}" แล้ว${storageLocation?' — เก็บที่ '+storageLocation:''}` });
+    // Self-log for receiver
+    await pushNotif(req.io, { type:'doc_received_log', toUsername: u.username,
+      fromUsername: u.username, fromFullName: u.full_name, docId: doc.id, docTitle: doc.title,
+      message: `คุณรับเอกสาร "${doc.title}" แล้ว${storageLocation?' — เก็บที่ '+storageLocation:''}` });
     res.json(doc);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -427,7 +485,22 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
     await query('DELETE FROM notifications WHERE doc_id=$1', [docId]);
     await query('DELETE FROM documents WHERE id=$1', [docId]);
     await auditLog('doc_delete', req.user.username, docId, { title: rows[0].title }, req.ip);
-    req.io.emit('doc_update', { type: 'deleted', docId });
+    req.io.to('role:admin').emit('doc_update', { type: 'deleted', docId });
+    // Notify sender + recipient that doc was deleted
+    const delDoc = rows[0];
+    const { rows: docMeta } = await query('SELECT sender_username,sender_full_name,recipient_username,recipient_department,recipient_type,title FROM documents WHERE id=$1', [docId]).catch(()=>({rows:[]}));
+    // doc already deleted, use pre-fetched rows[0]
+    const dTitle = delDoc.title || docId;
+    const dSender = delDoc.sender_username;
+    const actorName = req.user.full_name || req.user.username;
+    if (dSender) await pushNotif(req.io, { type:'doc_deleted', toUsername: dSender,
+      fromUsername: req.user.username, fromFullName: actorName, docId,
+      message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
+    if (delDoc.recipient_username && delDoc.recipient_username !== dSender) {
+      await pushNotif(req.io, { type:'doc_deleted', toUsername: delDoc.recipient_username,
+        fromUsername: req.user.username, fromFullName: actorName, docId,
+        message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
+    }
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -443,6 +516,46 @@ app.get('/api/docs/expired-drive-ids', auth, async (req, res) => {
       attachmentDriveIds: (r.attachments || []).filter(a => a.driveId).map(a => a.driveId)
     }));
     res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// FAST SYNC — single endpoint replacing 6 separate calls
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/sync', auth, async (req, res) => {
+  try {
+    const u = req.user;
+    // Run all queries in parallel for speed
+    const [usersR, roleR, rolesR, locsR, deptsR, notifsR, gdriveR] = await Promise.all([
+      query('SELECT * FROM users ORDER BY created_at ASC'),
+      query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]),
+      query('SELECT * FROM roles ORDER BY is_default DESC, name ASC'),
+      query('SELECT name FROM locations ORDER BY id ASC'),
+      query('SELECT name FROM departments ORDER BY id ASC'),
+      query(`SELECT * FROM notifications WHERE to_username=$1 OR to_username='__all__' ORDER BY created_at DESC LIMIT 100`, [u.username]),
+      query("SELECT value FROM settings WHERE key='gdrive'")
+    ]);
+    const perms = roleR.rows[0]?.permissions || {};
+    // Docs — scope to what this user can see
+    let docsRows;
+    if (perms.can_view_all || u.role_id === 'admin') {
+      ({ rows: docsRows } = await query('SELECT * FROM documents ORDER BY created_at DESC'));
+    } else {
+      ({ rows: docsRows } = await query(
+        `SELECT * FROM documents WHERE sender_username=$1 OR recipient_username=$1
+         OR (recipient_type='department' AND recipient_department=$2) ORDER BY created_at DESC`,
+        [u.username, u.department]
+      ));
+    }
+    res.json({
+      users:     usersR.rows.map(fmtUser),
+      docs:      docsRows.map(d => fmtDoc(d, true)),
+      roles:     rolesR.rows.map(r => ({ id: r.id, name: r.name, isDefault: r.is_default, permissions: r.permissions })),
+      locations:   locsR.rows.map(r => r.name),
+      departments: deptsR.rows.map(r => r.name),
+      notifs:      notifsR.rows.map(fmtNotif),
+      gdrive:    gdriveR.rows[0] ? JSON.parse(gdriveR.rows[0].value) : null
+    });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -541,6 +654,48 @@ app.post('/api/notifs/broadcast', auth, admin, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// DEPARTMENTS
+// ═══════════════════════════════════════════════════════════════════
+app.get('/api/departments', auth, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT name FROM departments ORDER BY id ASC');
+    res.json(rows.map(r => r.name));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/departments', auth, admin, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อแผนก' });
+    await query('INSERT INTO departments (name) VALUES($1) ON CONFLICT(name) DO NOTHING', [name.trim()]);
+    await auditLog('dept_create', req.user.username, name, {}, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/departments/:name', auth, admin, async (req, res) => {
+  try {
+    const oldName = decodeURIComponent(req.params.name);
+    const { name: newName } = req.body;
+    if (!newName?.trim()) return res.status(400).json({ error: 'กรุณาระบุชื่อแผนก' });
+    const dup = await query('SELECT 1 FROM departments WHERE name=$1 AND name!=$2', [newName.trim(), oldName]);
+    if (dup.rows.length) return res.status(400).json({ error: 'ชื่อแผนกซ้ำ' });
+    await query('UPDATE departments SET name=$1 WHERE name=$2', [newName.trim(), oldName]);
+    await auditLog('dept_rename', req.user.username, oldName, { newName }, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/departments/:name', auth, admin, async (req, res) => {
+  try {
+    const name = decodeURIComponent(req.params.name);
+    await query('DELETE FROM departments WHERE name=$1', [name]);
+    await auditLog('dept_delete', req.user.username, name, {}, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // LOCATIONS
 // ═══════════════════════════════════════════════════════════════════
 app.get('/api/locations', auth, async (req, res) => {
@@ -617,9 +772,20 @@ app.get('/api/settings/audit-log', auth, admin, async (req, res) => {
 // SOCKET.IO
 // ═══════════════════════════════════════════════════════════════════
 io.on('connection', socket => {
-  socket.on('join', username => {
+  socket.on('join', async (username) => {
     socket.join(username);
     socket.join('broadcast');
+    // Join department room + admin room for targeted emits
+    try {
+      const { rows } = await query('SELECT department, role_id FROM users WHERE username=$1', [username]);
+      if (rows[0]?.department) socket.join('dept:' + rows[0].department);
+      if (rows[0]?.role_id === 'admin') socket.join('role:admin');
+      // check can_admin permission for custom roles
+      if (rows[0]?.role_id && rows[0].role_id !== 'admin') {
+        const { rows: rr } = await query('SELECT permissions FROM roles WHERE id=$1', [rows[0].role_id]);
+        if (rr[0]?.permissions?.can_admin) socket.join('role:admin');
+      }
+    } catch(_) {}
   });
 });
 
