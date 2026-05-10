@@ -84,14 +84,23 @@ const fmtUser = u => ({
   department: u.department, location: u.location, role: u.role_id,
   passwordHash: u.password_hash, createdAt: Number(u.created_at)
 });
-const fmtDoc = d => ({
-  id: d.id, title: d.title, contentType: d.content_type, content: d.content,
+const fmtDoc = (d, stripBase64 = false) => ({
+  id: d.id, title: d.title, contentType: d.content_type,
+  // strip content body from list to reduce payload (fetched via /api/docs/:id for detail view)
+  content: stripBase64 ? undefined : d.content,
   senderUsername: d.sender_username, senderFullName: d.sender_full_name,
   senderDepartment: d.sender_department, senderLocation: d.sender_location,
   recipientType: d.recipient_type, recipientUsername: d.recipient_username,
   recipientDepartment: d.recipient_department, recipientFullName: d.recipient_full_name,
   priority: d.priority, attachmentNote: d.attachment_note,
-  attachments: d.attachments || [], comments: d.comments || [],
+  // strip base64 data from list; keep cloudinaryUrl for direct download
+  attachments: (d.attachments || []).map(a => stripBase64
+    ? { name: a.name, type: a.type, size: a.size,
+        cloudinaryUrl: a.cloudinaryUrl || null,
+        cloudinaryPublicId: a.cloudinaryPublicId || null,
+        driveId: a.driveId || null, driveUrl: a.driveUrl || null }
+    : a),
+  comments: stripBase64 ? [] : (d.comments || []),
   driveId: d.drive_id, driveUrl: d.drive_url,
   createdAt: Number(d.created_at), status: d.status,
   receivedAt: d.received_at ? Number(d.received_at) : null,

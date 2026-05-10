@@ -36,6 +36,12 @@ async function apiCall(method, path, body=null) {
   try {
     const r = await fetch(path, opts);
     if (r.status === 401) { _jwt=null; sessionStorage.removeItem(_JWT_KEY); showAuth(); return null; }
+    if (!r.ok) {
+      let errMsg = 'Server error ' + r.status;
+      try { const e = await r.json(); errMsg = e.error || errMsg; } catch(_){}
+      console.error('API error:', path, errMsg);
+      return null;
+    }
     return await r.json();
   } catch(e) { console.error('API error:', e); showToast('เชื่อมต่อ server ไม่ได้','error'); return null; }
 }
@@ -46,12 +52,14 @@ async function syncFromServer() {
     apiCall('GET','/api/roles'), apiCall('GET','/api/locations'),
     apiCall('GET','/api/notifs'), apiCall('GET','/api/settings/gdrive'),
   ]);
-  if (users)  localStorage.setItem(K.users,  JSON.stringify(users));
-  if (docs)   localStorage.setItem(K.docs,   JSON.stringify(docs));
-  if (roles)  localStorage.setItem(K.roles,  JSON.stringify(roles));
-  if (locs)   localStorage.setItem(K.locs,   JSON.stringify(locs));
-  if (notifs) localStorage.setItem(K.notifs, JSON.stringify(notifs));
-  if (gdrive) localStorage.setItem(K.gdrive, JSON.stringify(gdrive));
+  const isArr = v => Array.isArray(v);
+  const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+  if (isArr(users))  localStorage.setItem(K.users,  JSON.stringify(users));
+  if (isArr(docs))   localStorage.setItem(K.docs,   JSON.stringify(docs));
+  if (isArr(roles))  localStorage.setItem(K.roles,  JSON.stringify(roles));
+  if (isArr(locs))   localStorage.setItem(K.locs,   JSON.stringify(locs));
+  if (isArr(notifs)) localStorage.setItem(K.notifs, JSON.stringify(notifs));
+  if (isObj(gdrive) || isArr(gdrive)) localStorage.setItem(K.gdrive, JSON.stringify(gdrive));
 }
 
 // Fire-and-forget API sync — never blocks UI
@@ -89,7 +97,10 @@ function connectSocket(username) {
         if(['inbox','outbox','admin','home'].includes(currentPage)) navigate(currentPage);
       }
     });
-    _socket.on('new_notif',  async () => { await syncFromServer(); updateNotifBadge(); });
+    _socket.on('new_notif', async () => {
+      await syncFromServer(); updateNotifBadge(); updateInboxBadge();
+      if(['inbox','outbox','home'].includes(currentPage)) navigate(currentPage);
+    });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
 
@@ -518,8 +529,12 @@ function canPreviewDocs(u){
   return !!(role&&role.permissions&&role.permissions.can_preview_docs);
 }
 
-function openDocPreviewModal(docId){
-  const doc=getDocById(docId); if(!doc) return;
+async function openDocPreviewModal(docId){
+  // GET /api/docs list strips content+base64 to save localStorage space.
+  // Always fetch the full doc from server before rendering preview.
+  let doc = await apiCall('GET', '/api/docs/'+docId);
+  if(!doc) doc = getDocById(docId); // fallback to cache
+  if(!doc) return;
   const attHtml=doc.attachments&&doc.attachments.length>0?`
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <div class="preview-section-label">📎 ไฟล์แนบ (${doc.attachments.length})</div>
@@ -820,18 +835,28 @@ async function createDocument(data){
     qrUrl:BASE_URL+'?doc='+id
   };
   const saved = await apiCall('POST','/api/docs',doc);
-  if(!saved){ showToast('สร้างเอกสารไม่สำเร็จ','error'); return doc; }
-  // Notify recipients via API
-  const allU=getUsers();
-  if(doc.recipientType==='user'&&doc.recipientUsername){
-    await apiCall('POST','/api/notifs',{id:'N-'+Date.now(),type:'doc_sent',toUsername:doc.recipientUsername,fromUsername:user.username,fromFullName:user.fullName,message:user.fullName+' ส่งเอกสาร "'+doc.title+'" ให้คุณ',docId:doc.id,docTitle:doc.title,createdAt:Date.now()});
-  } else if(doc.recipientType==='department'&&doc.recipientDepartment){
-    for(const u2 of allU.filter(u=>u.department===doc.recipientDepartment&&u.username!==user.username)){
-      await apiCall('POST','/api/notifs',{id:'N-'+Date.now()+u2.username,type:'doc_sent',toUsername:u2.username,fromUsername:user.username,fromFullName:user.fullName,message:user.fullName+' ส่งเอกสาร "'+doc.title+'" ให้แผนก '+doc.recipientDepartment,docId:doc.id,docTitle:doc.title,createdAt:Date.now()});
+  if(!saved){ showToast('สร้างเอกสารไม่สำเร็จ กรุณาลองใหม่','error'); return null; }
+  // OPTIMISTIC: เพิ่ม doc ใน cache ทันที → outbox/home แสดงผลไว
+  try {
+    const cur = getDocs();
+    if(Array.isArray(cur) && !cur.find(d=>d.id===saved.id)){
+      saveDocs([saved, ...cur]);
     }
-  }
-  await syncFromServer();
+  } catch(_){}
   updateInboxBadge();
+  // Notify + sync ใน background (ไม่ block การแสดง success screen)
+  (async () => {
+    const allU = getUsers();
+    if(doc.recipientType==='user'&&doc.recipientUsername){
+      await apiCall('POST','/api/notifs',{id:'N-'+Date.now(),type:'doc_sent',toUsername:doc.recipientUsername,fromUsername:user.username,fromFullName:user.fullName,message:user.fullName+' ส่งเอกสาร "'+doc.title+'" ให้คุณ',docId:doc.id,docTitle:doc.title,createdAt:Date.now()});
+    } else if(doc.recipientType==='department'&&doc.recipientDepartment){
+      for(const u2 of allU.filter(u=>u.department===doc.recipientDepartment&&u.username!==user.username)){
+        await apiCall('POST','/api/notifs',{id:'N-'+Date.now()+u2.username,type:'doc_sent',toUsername:u2.username,fromUsername:user.username,fromFullName:user.fullName,message:user.fullName+' ส่งเอกสาร "'+doc.title+'" ให้แผนก '+doc.recipientDepartment,docId:doc.id,docTitle:doc.title,createdAt:Date.now()});
+      }
+    }
+    await syncFromServer();
+    updateInboxBadge();
+  })();
   return saved;
 }
 
@@ -1199,6 +1224,7 @@ async function wzSubmit(){
     ? {blocks:wz.blocks}
     : {tableHeading:wz.tableHeading,columns:wz.columns,rows:wz.rows};
   const doc=await createDocument({title:wz.title,contentType:wz.mode,content:docContent,recipientType,recipientUsername,recipientDepartment,recipientFullName,priority:wz.priority,attachmentNote:wz.attachmentNote,attachments:finalAttachments});
+  if(!doc||doc._failed){ showToast('ส่งเอกสารไม่สำเร็จ กรุณาลองใหม่','error'); return; }
   wzAttachments=[];
   wz.step=3; wz.lastDoc=doc;
   renderWizardSuccess(doc);
@@ -1512,7 +1538,7 @@ function renderProfile(){
     </div>
   </div>`;
   // load passkey status
-  apiCall('GET','/api/users/${escapeHtml(u.username)}/passkey-status').then(r=>{
+  apiCall('GET',`/api/users/${escapeHtml(u.username)}/passkey-status`).then(r=>{
     const el=document.getElementById('profile-passkey-status');
     if(el&&r) el.innerHTML=r.hasPasskey
       ?'<span class="passkey-chip set">✅ ตั้งแล้ว</span>'
