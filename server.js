@@ -186,7 +186,8 @@ app.post('/api/auth/register', async (req, res) => {
       [username, fullName, email||'', department||'', location||'', role, hash, now]
     );
     await auditLog('register', username, null, { fullName, department }, req.ip);
-    res.json({ token: tok(username), username, role });
+    const newUser = { username, fullName: fullName, email: email||'', department: department||'', location: location||'', role };
+    res.json({ token: tok(username), username, role, user: newUser });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -307,8 +308,11 @@ app.put('/api/users/:username', auth, admin, async (req, res) => {
 
 app.delete('/api/users/:username', auth, admin, async (req, res) => {
   try {
-    await query('DELETE FROM users WHERE username=$1', [req.params.username]);
-    await auditLog('user_delete', req.user.username, req.params.username, {}, req.ip);
+    const target = req.params.username;
+    if (target === req.user.username) return res.status(400).json({ error: 'ไม่สามารถลบบัญชีตัวเองได้' });
+    await query('DELETE FROM users WHERE username=$1', [target]);
+    await auditLog('user_delete', req.user.username, target, {}, req.ip);
+    req.io.emit('force_sync'); // tell ALL clients to refresh user list
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

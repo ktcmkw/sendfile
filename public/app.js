@@ -1028,15 +1028,26 @@ async function handleRegister(){
   const regBtn=document.querySelector('#form-register .btn-primary');
   if(regBtn){regBtn.disabled=true;regBtn.textContent='กำลังสมัคร...';}
   showAuthAlert('กำลังสมัคร...','');
-  const res = await apiCall('POST','/api/auth/register',{username,fullName,email,department,location,password});
+  // Use raw fetch to properly capture server error messages (apiCall returns null on error)
+  let res, regErrMsg;
+  try {
+    const r = await fetch('/api/auth/register', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username,fullName,email,department,location,password})
+    });
+    const data = await r.json();
+    if(!r.ok){ regErrMsg = data.error || 'สมัครไม่สำเร็จ'; } else { res = data; }
+  } catch(e){ regErrMsg = 'เชื่อมต่อ server ไม่ได้'; }
   if(regBtn){regBtn.disabled=false;regBtn.textContent='สมัครสมาชิก';}
-  if(!res||res.error){ showAuthAlert(res?.error||'สมัครไม่สำเร็จ','error'); return; }
+  if(regErrMsg||!res){ showAuthAlert(regErrMsg||'สมัครไม่สำเร็จ','error'); return; }
   // Auto-login after registration
   _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
   showAuthAlert('กำลังโหลดข้อมูล...','');
   await syncFromServer();
-  const regUser = getUsers().find(u=>u.username===username);
-  if(!regUser){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
+  // Build user object from cache; fallback to server response if sync failed
+  const regUser = getUsers().find(u=>u.username===username)
+    || res.user
+    || { username, fullName, email, department, location, role: res.role };
   store.setObj(K.session,{username:regUser.username,loginAt:Date.now()});
   connectSocket(username);
   enterDashboard(regUser);
