@@ -782,3 +782,35 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   .stat-card,.card-section,.doc-card{width:100%;}
 }
 
+
+/* ===== PASSKEY / PIN UI ===== */
+.pk-hero{text-align:center;padding:10px 0 16px;margin-bottom:4px;}
+.pk-hero-icon{font-size:32px;margin-bottom:4px;}
+.pk-hero-label{font-size:16px;font-weight:700;color:var(--text);}
+.pk-hero-sub{font-size:12px;color:var(--muted);margin-top:2px;}
+
+.pin-row{display:flex;gap:8px;justify-content:center;margin:8px 0 4px;}
+.pin-digit{
+  width:44px;height:54px;border:2px solid var(--border);border-radius:10px;
+  text-align:center;font-size:22px;font-weight:700;color:var(--text);
+  background:var(--white);caret-color:var(--blue);
+  transition:border-color .15s,box-shadow .15s;
+  -moz-appearance:textfield;
+}
+.pin-digit::-webkit-outer-spin-button,.pin-digit::-webkit-inner-spin-button{-webkit-appearance:none;}
+.pin-digit:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(99,102,241,.18);}
+.pin-digit.filled{border-color:var(--blue);background:var(--blue-lt);}
+
+.auth-divider{display:flex;align-items:center;gap:10px;margin:14px 0 10px;}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border);}
+.auth-divider span{font-size:12px;color:var(--muted);white-space:nowrap;}
+
+/* passkey status chip in admin/profile */
+.passkey-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;}
+.passkey-chip.set{background:rgba(16,185,129,.1);color:var(--green);border:1px solid rgba(16,185,129,.2);}
+.passkey-chip.unset{background:rgba(239,68,68,.08);color:var(--red);border:1px solid rgba(239,68,68,.2);}
+
+/* ===== LOCATION ROW (settings tab) ===== */
+.loc-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:6px;background:var(--white);transition:border-color .15s;}
+.loc-row:hover{border-color:var(--blue);}
+.loc-actions{display:flex;gap:2px;flex-shrink:0;}

@@ -289,6 +289,26 @@ async function deleteDoc(id){
   }
 }
 
+// ─── Admin: clear another user's passkey ──────────────────────────
+async function adminClearPasskey(username){
+  if(!confirm(`ล้าง Passkey ของ @${username} ?
+ผู้ใช้จะต้องตั้งใหม่เอง`)) return;
+  const r = await apiCall('DELETE','/api/auth/passkey/'+username);
+  if(r?.ok){ showToast('ล้าง Passkey เรียบร้อย'); renderAdminTab('members'); }
+  else showToast('ล้างไม่สำเร็จ','error');
+}
+
+// ─── Check passkey status via API (has_passkey field) ─────────────
+async function checkPasskeyStatus(username, elId){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  const r = await apiCall('GET','/api/users/'+username+'/passkey-status');
+  if(!r) return;
+  el.innerHTML = r.hasPasskey
+    ? '<span class="passkey-chip set">✅ ตั้งแล้ว</span>'
+    : '<span class="passkey-chip unset">❌ ยังไม่ได้ตั้ง</span>';
+}
+
 // ===================================================================
 // FILE ATTACHMENTS
 // ===================================================================
@@ -650,21 +670,29 @@ async function setupPasskey(){
 }
 
 async function handlePasskeyLogin(){
-  const username = (document.getElementById('pk-username')?.value||'').trim().toLowerCase();
   const passkey = (document.getElementById('pk-passkey')?.value||'').trim();
-  if(!username||!passkey){ showToast('กรุณากรอกชื่อผู้ใช้และ Passkey','error'); return; }
-  if(!/^\d{6}$/.test(passkey)){ showToast('Passkey ต้องเป็นตัวเลข 6 หลัก','error'); return; }
-  const pkBtn = document.getElementById('pk-login-btn');
-  if(pkBtn){pkBtn.disabled=true;pkBtn.textContent='กำลังเข้าสู่ระบบ...';}
-  const res = await apiCall('POST','/api/auth/passkey-login',{username,passkey});
-  if(pkBtn){pkBtn.disabled=false;pkBtn.textContent='เข้าสู่ระบบ';}
-  if(!res||res.error){ showToast(res?.error||'เข้าสู่ระบบไม่สำเร็จ','error'); return; }
-  _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
+  if(!passkey||passkey.length!==6){ showAuthAlert('กรุณากรอก Passkey 6 หลักให้ครบ','error'); return; }
+  if(!/^\d{6}$/.test(passkey)){ showAuthAlert('Passkey ต้องเป็นตัวเลข 6 หลัก','error'); return; }
+  const btn = document.querySelector('#passkey-section .btn-outline');
+  // visual feedback on pin digits
+  document.querySelectorAll('.pin-digit').forEach(el=>{ el.style.opacity='0.5'; });
+  const res = await apiCall('POST','/api/auth/passkey-only',{passkey});
+  document.querySelectorAll('.pin-digit').forEach(el=>{ el.style.opacity='1'; });
+  if(!res||res.error){
+    showAuthAlert(res?.error||'Passkey ไม่ถูกต้อง','error');
+    // shake animation + clear
+    document.querySelectorAll('.pin-digit').forEach(el=>{ el.value=''; el.classList.remove('filled'); });
+    document.getElementById('pk-passkey').value='';
+    document.querySelectorAll('.pin-digit')[0]?.focus();
+    return;
+  }
+  _jwt = res.token;
+  sessionStorage.setItem(_JWT_KEY, _jwt);
   await syncFromServer();
-  const user = getUsers().find(u=>u.username===username);
-  if(!user){ showToast('ไม่พบข้อมูลผู้ใช้','error'); return; }
+  const user = getUsers().find(u=>u.username===res.username);
+  if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
-  connectSocket(username);
+  connectSocket(res.username);
   enterDashboard(user);
 }
 
@@ -683,33 +711,73 @@ function showAuthAlert(msg,type){
   el.textContent=msg; el.className='auth-alert '+type; el.style.display='block';
 }
 function switchTab(tab){
-  document.getElementById('form-login').style.display=tab==='login'?'block':'none';
-  document.getElementById('form-register').style.display=tab==='register'?'block':'none';
+  // Passkey is default login method; password is secondary
+  const pkSec=document.getElementById('passkey-section');
+  const loginForm=document.getElementById('form-login');
+  const regForm=document.getElementById('form-register');
+  if(tab==='login'){
+    pkSec.style.display='block';
+    loginForm.style.display='none';
+    regForm.style.display='none';
+  } else {
+    pkSec.style.display='none';
+    loginForm.style.display='none';
+    regForm.style.display='block';
+  }
   document.getElementById('tab-login').className='tab-btn'+(tab==='login'?' active':'');
   document.getElementById('tab-register').className='tab-btn'+(tab==='register'?' active':'');
-  // Hide passkey section when switching tabs
-  const pkSec=document.getElementById('passkey-section');
-  if(pkSec) pkSec.style.display='none';
-  const pkBtn=document.getElementById('passkey-toggle-btn');
-  if(pkBtn) pkBtn.textContent='🔑 เข้าด้วย Passkey';
-  showAuthAlert('','');
+  document.getElementById('auth-alert').innerHTML='';
+  // Reset PIN
+  document.querySelectorAll('.pin-digit').forEach(el=>{ el.value=''; el.classList.remove('filled'); });
+  const hid=document.getElementById('pk-passkey'); if(hid) hid.value='';
 }
 
 function togglePasskeySection(){
   const pkSec=document.getElementById('passkey-section');
   const loginForm=document.getElementById('form-login');
-  const pkBtn=document.getElementById('passkey-toggle-btn');
-  const isShowing=pkSec&&pkSec.style.display!=='none';
-  if(isShowing){
+  const isPasskey = pkSec.style.display!=='none';
+  if(isPasskey){
+    // switch to password
     pkSec.style.display='none';
-    if(loginForm) loginForm.style.display='block';
-    if(pkBtn) pkBtn.textContent='🔑 เข้าด้วย Passkey';
+    loginForm.style.display='block';
+    // clear PIN inputs
+    document.querySelectorAll('.pin-digit').forEach(el=>{ el.value=''; el.classList.remove('filled'); });
+    document.getElementById('pk-passkey').value='';
+    setTimeout(()=>document.getElementById('l-username')?.focus(), 50);
   } else {
-    if(pkSec) pkSec.style.display='block';
-    if(loginForm) loginForm.style.display='none';
-    if(pkBtn) pkBtn.textContent='← กลับไปล็อกอินปกติ';
+    // switch to passkey
+    pkSec.style.display='block';
+    loginForm.style.display='none';
+    // pre-fill username if typed
+    const uname=document.getElementById('l-username')?.value||'';
+    if(uname) document.getElementById('pk-username').value=uname;
+    setTimeout(()=>document.getElementById('pk-username')?.focus(), 50);
   }
-  showAuthAlert('','');
+}
+
+// PIN digit input handler — auto-advance, collect into hidden field, auto-submit
+function pinInput(el, idx){
+  const v = el.value.replace(/[^0-9]/g,'');
+  el.value = v.slice(-1);
+  el.classList.toggle('filled', el.value!=='');
+  if(el.value && idx < 5){
+    const next = document.querySelectorAll('.pin-digit')[idx+1];
+    if(next) next.focus();
+  }
+  const digits = Array.from(document.querySelectorAll('.pin-digit')).map(d=>d.value).join('');
+  const hidden = document.getElementById('pk-passkey');
+  if(hidden) hidden.value = digits;
+  if(digits.length===6) setTimeout(handlePasskeyLogin, 180);
+}
+
+// Backspace: move to previous digit
+function pinKeydown(el, idx){
+  // Note: called as onkeydown so 'event' is the KeyboardEvent, el is the input
+  const ev = event || window.event;
+  if(ev?.key==='Backspace'&&!el.value&&idx>0){
+    const prev = document.querySelectorAll('.pin-digit')[idx-1];
+    if(prev){ prev.value=''; prev.classList.remove('filled'); prev.focus(); }
+  }
 }
 document.addEventListener('keydown',e=>{ if(e.key==='Enter'){ const t=document.getElementById('form-login').style.display!=='none'?'login':'register'; if(t==='login')handleLogin(); else handleRegister(); }});
 
@@ -1380,7 +1448,21 @@ function renderProfile(){
     <div class="ddc-row"><span class="ddc-label">แผนก</span><span>${escapeHtml(u.department)}</span></div>
     <div class="ddc-row"><span class="ddc-label">สถานที่</span><span>${escapeHtml(u.location)}</span></div>
     <div class="ddc-row"><span class="ddc-label">สมาชิกตั้งแต่</span><span>${formatDate(u.createdAt)}</span></div>
+    <div class="ddc-row" style="flex-wrap:wrap;gap:8px;">
+      <span class="ddc-label">🔑 Passkey</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span id="profile-passkey-status">กำลังตรวจสอบ...</span>
+        <button class="btn-outline btn-sm" onclick="openPasskeySetupModal()">✏️ ตั้ง/เปลี่ยน Passkey</button>
+      </div>
+    </div>
   </div>`;
+  // load passkey status
+  apiCall('GET','/api/users/${escapeHtml(u.username)}/passkey-status').then(r=>{
+    const el=document.getElementById('profile-passkey-status');
+    if(el&&r) el.innerHTML=r.hasPasskey
+      ?'<span class="passkey-chip set">✅ ตั้งแล้ว</span>'
+      :'<span class="passkey-chip unset">❌ ยังไม่ได้ตั้ง</span>';
+  });
 }
 
 // ===================================================================
@@ -1555,11 +1637,17 @@ function renderAdminTab(tab){
       </div>
     </div>
     <div class="card-section"><div class="card-section-header">สถานที่จัดเก็บเอกสาร <button class="btn-primary btn-sm" onclick="addLocation()">+ เพิ่ม</button></div>
-    <div class="card-section-body">
-    ${locs.map((l,i)=>`<div class="doc-card" style="margin-bottom:6px;">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><polyline points="16,2 12,7 8,2"/></svg>
-      <span style="flex:1">${escapeHtml(l)}</span>
-      <button class="btn-icon" style="color:var(--red)" onclick="removeLocation('${escapeHtml(l)}')">🗑</button>
+    <div class="card-section-body" id="loc-list">
+    ${locs.map((l)=>`<div class="loc-row" id="loc-row-${btoa(encodeURIComponent(l)).replace(/=/g,'')}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><rect x="2" y="7" width="20" height="14" rx="2"/><polyline points="16,2 12,7 8,2"/></svg>
+      <span class="loc-name" style="flex:1;font-size:13px;">${escapeHtml(l)}</span>
+      <input class="loc-input" type="text" value="${escapeHtml(l)}" style="display:none;flex:1;padding:4px 8px;border:1px solid var(--blue);border-radius:6px;font-size:13px;background:var(--white);color:var(--text);" onkeydown="if(event.key==='Enter')confirmRename(this,'${escapeHtml(l)}');if(event.key==='Escape')cancelRename(this,'${escapeHtml(l)}')">
+      <div class="loc-actions">
+        <button class="btn-icon loc-edit-btn" title="แก้ไขชื่อ" onclick="startRename(this,'${escapeHtml(l)}')">✏️</button>
+        <button class="btn-icon loc-save-btn" title="บันทึก" style="display:none;color:var(--green)" onclick="confirmRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✅</button>
+        <button class="btn-icon loc-cancel-btn" title="ยกเลิก" style="display:none;" onclick="cancelRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✕</button>
+        <button class="btn-icon" style="color:var(--red)" title="ลบ" onclick="removeLocation('${escapeHtml(l)}')">🗑</button>
+      </div>
     </div>`).join('')}
     </div></div>`;
   }
@@ -1573,11 +1661,12 @@ let adminSelectedUser=null;
 function selectAdminUser(username){
   adminSelectedUser=username;
   renderAdminTab('members');
-  // Restore scroll position of list after re-render
   setTimeout(()=>{
     const el=document.querySelector('.user-list-item.selected');
     if(el) el.scrollIntoView({block:'nearest'});
-  },50);
+    // load passkey status for selected user
+    checkPasskeyStatus(username, `admin-passkey-status-${username}`);
+  },80);
 }
 
 function filterUserList(q){
@@ -1643,6 +1732,16 @@ function renderUserDetailPanel(username){
         <div class="udp-grid">
           <div class="form-group"><label>รหัสผ่านใหม่</label><div class="pw-wrap"><input id="edit-pw" type="password" placeholder="อย่างน้อย 6 ตัว"><button type="button" class="pw-toggle" onclick="togglePw('edit-pw',this)">👁</button></div></div>
           <div class="form-group"><label>ยืนยันรหัสผ่าน</label><div class="pw-wrap"><input id="edit-pw2" type="password" placeholder="••••••"><button type="button" class="pw-toggle" onclick="togglePw('edit-pw2',this)">👁</button></div></div>
+        </div>
+      </div>
+    </div>
+      <div class="udp-section">
+        <div class="udp-section-title">🔑 Passkey</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div id="admin-passkey-status-${escapeHtml(u.username)}" style="font-size:13px;color:var(--muted);">กำลังตรวจสอบ...</div>
+          <div style="display:flex;gap:6px;">
+            ${isSelf?`<button class="btn-outline btn-sm" onclick="openPasskeySetupModal()">✏️ ตั้ง/เปลี่ยน Passkey</button>`:`<button class="btn-outline btn-sm" style="color:var(--red);border-color:var(--red);" onclick="adminClearPasskey('${escapeHtml(u.username)}')">🗑 ล้าง Passkey</button>`}
+          </div>
         </div>
       </div>
     </div>
@@ -1719,7 +1818,45 @@ async function deleteMember(username){
   renderAdminTab('members'); showToast('ลบบัญชีแล้ว');
 }
 async function addLocation(){ const n=prompt('ชื่อสถานที่จัดเก็บ:',''); if(!n||!n.trim())return; const res=await apiCall('POST','/api/locations',{name:n.trim()}); if(res?.ok){await syncFromServer();renderAdminTab('settings');showToast('เพิ่มสถานที่แล้ว');}else{showToast(res?.error||'เพิ่มไม่สำเร็จ','error');}}
-async function removeLocation(name){ const res=await apiCall('DELETE','/api/locations/'+encodeURIComponent(name)); if(res?.ok){await syncFromServer();renderAdminTab('settings');showToast('ลบสถานที่แล้ว');}else{showToast('ลบไม่สำเร็จ','error');}}
+async function removeLocation(name){ if(!confirm(`ลบ "${name}" ?
+เอกสารที่เก็บที่นี่จะยังคงอยู่`))return; const res=await apiCall('DELETE','/api/locations/'+encodeURIComponent(name)); if(res?.ok){await syncFromServer();renderAdminTab('settings');showToast('ลบสถานที่แล้ว');}else{showToast('ลบไม่สำเร็จ','error');}}
+
+// ─── Location inline rename helpers ───────────────────────────────
+function startRename(btn, oldName){
+  const row = btn.closest('.loc-row');
+  row.querySelector('.loc-name').style.display = 'none';
+  const inp = row.querySelector('.loc-input');
+  inp.style.display = 'block';
+  inp.focus(); inp.select();
+  row.querySelector('.loc-edit-btn').style.display = 'none';
+  row.querySelector('.loc-save-btn').style.display = 'inline-flex';
+  row.querySelector('.loc-cancel-btn').style.display = 'inline-flex';
+}
+
+function cancelRename(inp, oldName){
+  const row = inp.closest('.loc-row');
+  inp.value = oldName;
+  inp.style.display = 'none';
+  row.querySelector('.loc-name').style.display = 'inline';
+  row.querySelector('.loc-edit-btn').style.display = 'inline-flex';
+  row.querySelector('.loc-save-btn').style.display = 'none';
+  row.querySelector('.loc-cancel-btn').style.display = 'none';
+}
+
+async function confirmRename(inp, oldName){
+  const newName = inp.value.trim();
+  if(!newName){ showToast('ชื่อต้องไม่ว่างเปล่า','error'); return; }
+  if(newName === oldName){ cancelRename(inp, oldName); return; }
+  const res = await apiCall('PUT','/api/locations/'+encodeURIComponent(oldName),{newName});
+  if(res?.ok){
+    showToast(`เปลี่ยนชื่อ "${oldName}" → "${newName}" เรียบร้อย — อัพเดทเอกสารและ User ทั้งหมดแล้ว`);
+    await syncFromServer();
+    renderAdminTab('settings');
+  } else {
+    showToast(res?.error||'เปลี่ยนชื่อไม่สำเร็จ','error');
+    cancelRename(inp, oldName);
+  }
+}
 function exportDocs(){ const data=JSON.stringify(getDocs(),null,2); const blob=new Blob([data],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`sendfile_docs_${new Date().toISOString().slice(0,10)}.json`; a.click(); showToast('Export เรียบร้อย'); }
 function exportSingleDoc(id){ const doc=getDocById(id); if(!doc)return; const blob=new Blob([JSON.stringify(doc,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${id}.json`; a.click(); showToast('Export เรียบร้อย'); }
 

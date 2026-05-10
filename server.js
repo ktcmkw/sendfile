@@ -144,6 +144,42 @@ app.post('/api/auth/passkey-setup', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Passkey-only login (no username needed) ──────────────────────────────────
+app.post('/api/auth/passkey-only', async (req, res) => {
+  try {
+    const { passkey } = req.body;
+    if (!passkey || !/^\d{6}$/.test(passkey)) return res.status(400).json({ error: 'Passkey ต้องเป็นตัวเลข 6 หลัก' });
+    const { rows } = await query('SELECT * FROM users WHERE passkey_hash IS NOT NULL');
+    for (const user of rows) {
+      const ok = await bcrypt.compare(passkey, user.passkey_hash);
+      if (ok) {
+        await auditLog('login_passkey', user.username, null, {}, req.ip);
+        return res.json({ token: tok(user.username), username: user.username, role: user.role_id });
+      }
+    }
+    await auditLog('login_passkey_fail', 'unknown', null, {}, req.ip);
+    return res.status(401).json({ error: 'Passkey ไม่ถูกต้อง' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Check if user has passkey set ────────────────────────────────────────────
+app.get('/api/users/:username/passkey-status', auth, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.params.username]);
+    if (!rows.length) return res.status(404).json({ error: 'ไม่พบผู้ใช้' });
+    res.json({ hasPasskey: !!rows[0].passkey_hash });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Admin: clear a user's passkey ───────────────────────────────────────────
+app.delete('/api/auth/passkey/:username', auth, admin, async (req, res) => {
+  try {
+    await query('UPDATE users SET passkey_hash=NULL WHERE username=$1', [req.params.username]);
+    await auditLog('passkey_clear', req.user.username, req.params.username, {}, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/auth/passkey-login', async (req, res) => {
   try {
     const { username, passkey } = req.body;
@@ -435,6 +471,26 @@ app.post('/api/locations', auth, admin, async (req, res) => {
   try {
     await query('INSERT INTO locations (name) VALUES($1) ON CONFLICT (name) DO NOTHING', [req.body.name]);
     res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/locations/:name', auth, admin, async (req, res) => {
+  try {
+    const oldName = decodeURIComponent(req.params.name);
+    const { newName } = req.body;
+    if (!newName?.trim()) return res.status(400).json({ error: 'ชื่อใหม่ต้องไม่ว่างเปล่า' });
+    const n = newName.trim();
+    // Check duplicate
+    const dup = await query('SELECT 1 FROM locations WHERE name=$1', [n]);
+    if (dup.rows.length) return res.status(409).json({ error: 'ชื่อสถานที่นี้มีอยู่แล้ว' });
+    // Rename in locations table
+    await query('UPDATE locations SET name=$1 WHERE name=$2', [n, oldName]);
+    // Cascade: update documents.storage_location
+    await query('UPDATE documents SET storage_location=$1 WHERE storage_location=$2', [n, oldName]);
+    // Cascade: update users.location
+    await query('UPDATE users SET location=$1 WHERE location=$2', [n, oldName]);
+    await auditLog('location_rename', req.user.username, null, { oldName, newName: n }, req.ip);
+    res.json({ ok: true, newName: n });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

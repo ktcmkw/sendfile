@@ -25,26 +25,41 @@
   </div>
   <div id="auth-alert" class="auth-alert"></div>
 
-  <!-- LOGIN FORM -->
-  <div id="form-login">
+  <!-- PASSKEY LOGIN (default / primary) — no username required -->
+  <div id="passkey-section" style="display:block;">
+    <div class="pk-hero">
+      <div class="pk-hero-icon">🔑</div>
+      <div class="pk-hero-label">เข้าด้วย Passkey</div>
+      <div class="pk-hero-sub">กรอกรหัส 6 หลัก ไม่ต้องกรอกชื่อผู้ใช้</div>
+    </div>
+    <div class="form-group">
+      <label style="text-align:center;display:block;margin-bottom:8px;">Passkey 6 หลัก</label>
+      <div class="pin-row" id="pin-display">
+        <input class="pin-digit" type="password" inputmode="numeric" maxlength="1" oninput="pinInput(this,0)" onkeydown="pinKeydown(this,0)">
+        <input class="pin-digit" type="password" inputmode="numeric" maxlength="1" oninput="pinInput(this,1)" onkeydown="pinKeydown(this,1)">
+        <input class="pin-digit" type="password" inputmode="numeric" maxlength="1" oninput="pinInput(this,2)" onkeydown="pinKeydown(this,2)">
+        <input class="pin-digit" type="password" inputmode="numeric" maxlength="1" oninput="pinInput(this,3)" onkeydown="pinKeydown(this,3)">
+        <input class="pin-digit" type="password" inputmode="numeric" maxlength="1" oninput="pinInput(this,4)" onkeydown="pinKeydown(this,4)">
+        <input class="pin-digit" type="password" inputmode="numeric" maxlength="1" oninput="pinInput(this,5)" onkeydown="pinKeydown(this,5)">
+      </div>
+      <input type="hidden" id="pk-passkey">
+    </div>
+    <div class="auth-divider"><span>หรือ</span></div>
+    <button class="btn-outline" style="width:100%;" onclick="togglePasskeySection()">🔐 เข้าด้วยรหัสผ่าน</button>
+  </div>
+
+  <!-- PASSWORD LOGIN (secondary / hidden by default) -->
+  <div id="form-login" style="display:none;">
+    <div class="pk-hero">
+      <div class="pk-hero-icon">🔐</div>
+      <div class="pk-hero-label">เข้าด้วยรหัสผ่าน</div>
+      <div class="pk-hero-sub">สำหรับการเข้าสู่ระบบแบบปกติ</div>
+    </div>
     <div class="form-group"><label>ชื่อผู้ใช้</label><input id="l-username" type="text" placeholder="username" autocomplete="username"></div>
     <div class="form-group"><label>รหัสผ่าน</label><div class="pw-wrap"><input id="l-password" type="password" placeholder="••••••" autocomplete="current-password"><button type="button" class="pw-toggle" onclick="togglePw('l-password',this)" title="แสดง/ซ่อน">👁</button></div></div>
     <button class="btn-primary" style="width:100%;margin-top:4px;" onclick="handleLogin()">เข้าสู่ระบบ</button>
-  </div>
-
-  <!-- PASSKEY LOGIN SECTION -->
-  <div id="passkey-section" style="display:none;margin-top:16px;">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-      <div style="flex:1;height:1px;background:var(--border);"></div>
-      <span style="font-size:12px;color:var(--muted);white-space:nowrap;">─── หรือ ───</span>
-      <div style="flex:1;height:1px;background:var(--border);"></div>
-    </div>
-    <div class="form-group"><label>ชื่อผู้ใช้</label><input id="pk-username" type="text" placeholder="username" autocomplete="username"></div>
-    <div class="form-group"><label>Passkey 6 หลัก</label><input id="pk-passkey" type="number" maxlength="6" placeholder="••••••" oninput="if(this.value.length>6)this.value=this.value.slice(0,6)" style="letter-spacing:4px;font-size:18px;text-align:center;"></div>
-    <button id="pk-login-btn" class="btn-primary" style="width:100%;" onclick="handlePasskeyLogin()">เข้าสู่ระบบด้วย Passkey</button>
-  </div>
-  <div style="text-align:center;margin-top:12px;">
-    <button class="btn-outline btn-sm" style="width:100%;" onclick="togglePasskeySection()" id="passkey-toggle-btn">🔑 เข้าด้วย Passkey</button>
+    <div class="auth-divider"><span>หรือ</span></div>
+    <button class="btn-outline" style="width:100%;" onclick="togglePasskeySection()">🔑 เข้าด้วย Passkey</button>
   </div>
 
   <!-- REGISTER FORM -->
