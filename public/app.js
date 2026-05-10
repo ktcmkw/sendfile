@@ -2577,11 +2577,14 @@ async function checkEmailStatus(){
 
 // ── Role CRUD ─────────────────────────────────────────────────
 const PERM_KEYS=['can_send','can_receive','can_view_all','can_manage_users','can_export','can_preview_docs'];
+const PERM_DEFAULTS={can_send:true,can_receive:true,can_view_all:false,can_manage_users:false,can_export:false,can_preview_docs:false};
 function openAddRoleModal(){ openAddRoleModalInner(null); }
 function openEditRoleModal(id){ const r=getRoleById(id); openAddRoleModalInner(r); }
 function openAddRoleModalInner(existing){
-  const r=existing||{id:'',name:'',isDefault:false,permissions:{can_send:true,can_receive:true,can_view_all:false,can_manage_users:false,can_export:false}};
-  const permChecks=PERM_KEYS.map(p=>`<label class="perm-check"><input type="checkbox" id="perm-${p}" ${r.permissions[p]?'checked':''}>${permLabel(p)}</label>`).join('');
+  const r=existing||{id:'',name:'',isDefault:false,permissions:{...PERM_DEFAULTS}};
+  // Merge with defaults so every key is present even on old/partial permission objects
+  const perms=Object.assign({...PERM_DEFAULTS}, r.permissions||{});
+  const permChecks=PERM_KEYS.map(p=>`<label class="perm-check"><input type="checkbox" id="perm-${p}" ${perms[p]?'checked':''}>${permLabel(p)}</label>`).join('');
   openModal(existing?'แก้ไขบทบาท':'สร้างบทบาทใหม่',`
     <div class="form-group"><label>ชื่อบทบาท *</label><input type="text" id="new-role-name" value="${escapeHtml(r.name)}" placeholder="เช่น Manager, HR, Viewer"></div>
     <div style="margin-top:14px;"><div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:10px;">สิทธิ์การใช้งาน</div>
@@ -2592,6 +2595,9 @@ function openAddRoleModalInner(existing){
 async function saveRole(existingId){
   const name=(document.getElementById('new-role-name')?.value||'').trim();
   if(!name){showToast('กรุณาระบุชื่อบทบาท','error');return;}
+  // Guard: if modal was destroyed by a re-render, checkboxes won't exist
+  const firstEl=document.getElementById('perm-'+PERM_KEYS[0]);
+  if(!firstEl){showToast('เกิดข้อผิดพลาด กรุณาเปิดหน้าต่างแก้ไขใหม่อีกครั้ง','error');return;}
   const perms={};
   PERM_KEYS.forEach(p=>{perms[p]=document.getElementById('perm-'+p)?.checked||false;});
   let res;
@@ -2602,15 +2608,28 @@ async function saveRole(existingId){
     res=await apiCall('POST','/api/roles',{id,name,permissions:perms});
   }
   if(!res||res.error){showToast(res?.error||'บันทึกไม่สำเร็จ','error');return;}
-  await syncFromServer(); closeModal();
-  showToast(existingId?'แก้ไขบทบาทแล้ว':'สร้างบทบาทแล้ว');
+  // Immediately update K.roles — don't rely on syncFromServer to avoid stale UI
+  const roles=getRoles();
+  if(existingId){
+    const idx=roles.findIndex(r=>r.id===existingId);
+    if(idx>=0) roles[idx]={...roles[idx],name,permissions:perms};
+  } else {
+    roles.push({id:'role_'+Date.now(),name,isDefault:false,permissions:perms});
+  }
+  localStorage.setItem(K.roles,JSON.stringify(roles));
+  closeModal();
+  showToast(existingId?'แก้ไขบทบาทแล้ว ✓':'สร้างบทบาทแล้ว ✓');
   renderAdminTab('roles');
+  syncFromServer().then(()=>renderAdminTab('roles')).catch(()=>{});
 }
 async function deleteRole(id){
   if(!confirm('ลบบทบาทนี้?'))return;
   const res=await apiCall('DELETE','/api/roles/'+id);
   if(!res||res.error){showToast(res?.error||'ลบไม่สำเร็จ','error');return;}
-  await syncFromServer(); showToast('ลบบทบาทแล้ว'); renderAdminTab('roles');
+  localStorage.setItem(K.roles,JSON.stringify(getRoles().filter(r=>r.id!==id)));
+  showToast('ลบบทบาทแล้ว');
+  renderAdminTab('roles');
+  syncFromServer().then(()=>renderAdminTab('roles')).catch(()=>{});
 }
 
 function openAddMemberModal(){
