@@ -431,13 +431,24 @@ function priorityBadge(p){
 // LOCATIONS
 // ===================================================================
 function getLocations(){
-  let locs=store.get(K.locs);
-  if(!locs||locs.length===0){ locs=['สำนักงาน','ตู้ A-1','ตู้ A-2','ตู้ A-3','กล่อง B-1','กล่อง B-2']; store.set(K.locs,locs); }
-  return locs;
+  return store.get(K.locs) || [];
 }
 function getDepartments(){
-  const d=store.get(K.depts);
-  return d&&d.length>0 ? d : ['บริหาร','ขาย','บัญชี','สโตร์','ฝ่ายบุคคล','ช่าง','พนักงานทั่วไป'];
+  return store.get(K.depts) || [];
+}
+
+// ── Ensure locations/departments are loaded before showing dropdowns ──────────
+// If cache is empty (sync not yet complete), fetch direct from API and re-render
+async function ensureLocsLoaded() {
+  if (getLocations().length > 0 && getDepartments().length > 0) return;
+  try {
+    const [l, d] = await Promise.all([
+      apiCall('GET', '/api/locations'),
+      apiCall('GET', '/api/departments')
+    ]);
+    if (Array.isArray(l) && l.length) localStorage.setItem(K.locs, JSON.stringify(l));
+    if (Array.isArray(d) && d.length) localStorage.setItem(K.depts, JSON.stringify(d));
+  } catch(_) {}
 }
 
 // ===================================================================
@@ -1269,13 +1280,15 @@ function switchTab(tab){
       deptSel.innerHTML=`<option value="">-- เลือกแผนก --</option>`+
         depts.map(d=>`<option value="${escapeHtml(d)}"${cur===d?' selected':''}>${escapeHtml(d)}</option>`).join('');
     }
-    // Populate location dropdown from cache
+    // Populate location dropdown — fetch from API if cache empty
     const locSel=document.getElementById('r-location');
     if(locSel){
-      const locs=getLocations();
-      const curL=locSel.value;
-      locSel.innerHTML=`<option value="">-- เลือกสถานที่ --</option>`+
-        locs.map(l=>`<option value="${escapeHtml(l)}"${curL===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
+      ensureLocsLoaded().then(()=>{
+        const locs=getLocations();
+        const curL=locSel.value;
+        locSel.innerHTML=`<option value="">-- เลือกสถานที่ --</option>`+
+          locs.map(l=>`<option value="${escapeHtml(l)}"${curL===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
+      });
     }
   }
   document.getElementById('tab-login').className='tab-btn'+(tab==='login'?' active':'');
@@ -1461,11 +1474,23 @@ function navigate(page,params={}){
   switch(page){
     case 'home':    renderHome(); break;
     case 'create':  initWizard(); break;
-    case 'inbox':   syncFromServer().then(()=>renderInbox()); break;
-    case 'outbox':  syncFromServer().then(()=>renderOutbox()); break;
+    case 'inbox':
+      renderInbox(); // instant from cache
+      syncFromServer().then(()=>renderInbox()).catch(()=>{});
+      break;
+    case 'outbox':
+      renderOutbox();
+      syncFromServer().then(()=>renderOutbox()).catch(()=>{});
+      break;
     case 'profile': renderProfile(); break;
-    case 'admin':   syncFromServer().then(()=>renderAdmin()); break;
-    case 'notifs':  syncFromServer().then(()=>renderNotifs()); break;
+    case 'admin':
+      renderAdmin(); // render cache immediately (no blank wait)
+      syncFromServer().then(()=>renderAdmin()).catch(()=>{}); // refresh in background
+      break;
+    case 'notifs':
+      renderNotifs();
+      syncFromServer().then(()=>renderNotifs()).catch(()=>{});
+      break;
     case 'qr':      renderQRViewer(params.docId); break;
   }
 }
@@ -2265,6 +2290,20 @@ function renderAdminTab(tab){
   } else if(tab==='storage'){
     const locs=getLocations();
     const depts=getDepartments();
+    // If data not yet synced, fetch live then re-render
+    if(locs.length===0&&depts.length===0){
+      ensureLocsLoaded().then(()=>{
+        if(getLocations().length>0||getDepartments().length>0) renderAdminTab('storage');
+      });
+      content=`<div style="text-align:center;padding:40px 20px;color:var(--muted);">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom:12px;opacity:.4;"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <div style="font-weight:600;margin-bottom:6px;">กำลังโหลดข้อมูลจากเซิร์ฟเวอร์…</div>
+        <div style="font-size:12px;margin-bottom:16px;">หากใช้เวลานานกว่า 10 วินาที กรุณากดรีเฟรช</div>
+        <button class="btn-primary btn-sm" onclick="syncFromServer().then(()=>renderAdminTab('storage'))">🔄 รีเฟรชข้อมูล</button>
+      </div>`;
+      document.getElementById('page-body').innerHTML=`<div class="admin-tabs">${tabs.map((t,i)=>`<div class="admin-tab${t===tab?' active':''}" onclick="renderAdminTab('${t}')">${labels[i]}</div>`).join('')}</div>${content}`;
+      return;
+    }
     // Locations section
     const locsHtml=locs.map(l=>`<div class="loc-row">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0"><rect x="2" y="7" width="20" height="14" rx="2"/><polyline points="16,2 12,7 8,2"/></svg>
@@ -2700,7 +2739,8 @@ async function deleteRole(id){
   syncFromServer().then(()=>renderAdminTab('roles')).catch(()=>{});
 }
 
-function openAddMemberModal(){
+async function openAddMemberModal(){
+  await ensureLocsLoaded();
   // BUG3-fix: use getLocations() so custom locations are included
   const locs=getLocations();
   const locOpts=locs.map(l=>`<option>${escapeHtml(l)}</option>`).join('');
