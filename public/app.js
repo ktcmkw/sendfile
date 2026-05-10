@@ -36,6 +36,13 @@ async function apiCall(method, path, body=null) {
   try {
     const r = await fetch(path, opts);
     if (r.status === 401) { _jwt=null; sessionStorage.removeItem(_JWT_KEY); showAuth(); return null; }
+    if (r.status === 503) {
+      // DB/server temporarily unavailable — show toast but do NOT logout
+      let errMsg = 'ระบบชั่วคราวไม่พร้อมใช้งาน กรุณาลองใหม่อีกครั้ง';
+      try { const e = await r.json(); errMsg = e.error || errMsg; } catch(_){}
+      showToast(errMsg, 'error');
+      return null;
+    }
     if (!r.ok) {
       let errMsg = 'Server error ' + r.status;
       try { const e = await r.json(); errMsg = e.error || errMsg; } catch(_){}
@@ -44,6 +51,19 @@ async function apiCall(method, path, body=null) {
     }
     return await r.json();
   } catch(e) { console.error('API error:', e); showToast('เชื่อมต่อ server ไม่ได้','error'); return null; }
+}
+
+// Always keep the logged-in user in K.users so getCurrentUser() never returns null
+// even if syncFromServer() fails (Render sleeping / Neon DB cold start)
+function seedCurrentUser(user) {
+  if (!user || !user.username) return;
+  try {
+    const users = getUsers();
+    const idx = users.findIndex(u => u.username === user.username);
+    if (idx >= 0) users[idx] = { ...users[idx], ...user };
+    else users.unshift(user);
+    localStorage.setItem(K.users, JSON.stringify(users));
+  } catch(_) {}
 }
 
 async function syncFromServer() {
@@ -1042,12 +1062,13 @@ async function handleRegister(){
   if(regErrMsg||!res){ showAuthAlert(regErrMsg||'สมัครไม่สำเร็จ','error'); return; }
   // Auto-login after registration
   _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
+  // Seed K.users immediately — getCurrentUser() must never return null even if sync fails
+  const regUserData = res.user || { username, fullName, email, department, location, role: res.role };
+  seedCurrentUser(regUserData);
   showAuthAlert('กำลังโหลดข้อมูล...','');
   await syncFromServer();
-  // Build user object from cache; fallback to server response if sync failed
-  const regUser = getUsers().find(u=>u.username===username)
-    || res.user
-    || { username, fullName, email, department, location, role: res.role };
+  // Build user from cache (may be richer after sync); fall back to seeded data
+  const regUser = getUsers().find(u=>u.username===username) || regUserData;
   store.setObj(K.session,{username:regUser.username,loginAt:Date.now()});
   connectSocket(username);
   enterDashboard(regUser);
@@ -1076,9 +1097,11 @@ async function handleLogin(){
   if(loginBtn){loginBtn.disabled=false;loginBtn.textContent='เข้าสู่ระบบ';}
   if(loginErr||!res){ showAuthAlert(loginErr||'เข้าสู่ระบบไม่สำเร็จ','error'); return; }
   _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
+  // Seed K.users immediately — getCurrentUser() must never return null even if sync fails
+  if (res.user) seedCurrentUser(res.user);
   showAuthAlert('กำลังโหลดข้อมูล...','');
   await syncFromServer();
-  // Fallback: use user object from server response if sync/cache failed
+  // Build user from cache (richer after sync); fall back to server response
   const user = getUsers().find(u=>u.username===username) || res.user;
   if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้ กรุณาลองใหม่อีกครั้ง','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
@@ -1131,8 +1154,10 @@ async function handlePasskeyLogin(){
   }
   _jwt = res.token;
   sessionStorage.setItem(_JWT_KEY, _jwt);
+  // Seed K.users with passkey login response so getCurrentUser() works even if sync fails
+  if (res.user) seedCurrentUser(res.user);
   await syncFromServer();
-  const user = getUsers().find(u=>u.username===res.username);
+  const user = getUsers().find(u=>u.username===res.username) || res.user;
   if(!user){ showAuthAlert('ไม่พบข้อมูลผู้ใช้','error'); return; }
   store.setObj(K.session,{username:user.username,loginAt:Date.now()});
   connectSocket(res.username);
@@ -2752,41 +2777,4 @@ function printEnvelope(docId){
 
 // ===================================================================
 // INIT
-// ===================================================================
-function init(){
-  // Always hide dashboard, show auth first — prevents blank page if JS partially fails
-  document.getElementById('dashboard').style.display='none';
-  document.getElementById('auth-screen').style.display='flex';
-
-  // Restore saved theme
-  const savedTheme=localStorage.getItem('sendfile_theme')||'light';
-  document.documentElement.setAttribute('data-theme',savedTheme);
-  updateThemeBtn(savedTheme);
-
-  // Parse ?doc= URL param — used when scanning QR code
-  const params=new URLSearchParams(window.location.search);
-  const docParam=params.get('doc');
-  if(docParam) window._pendingDoc=docParam;
-
-  const session=getSession();
-  if(session){
-    const user=findUser(session.username);
-    if(user){ enterDashboard(user); return; }
-  }
-  // Not logged in — show login; after login _pendingDoc will redirect
-  if(docParam){
-    showAuthAlert('กรุณาเข้าสู่ระบบเพื่อดูเอกสาร '+docParam,'success');
-  }
-}
-
-// Real-time notifications: storage event (cross-tab) + polling fallback
-window.addEventListener('storage',e=>{
-  if((e.key===K.notifs||e.key===K.docs)&&getCurrentUser()){
-    updateNotifBadge(); updateInboxBadge();
-  }
-});
-setInterval(()=>{
-  if(getCurrentUser()){ updateNotifBadge(); updateInboxBadge(); }
-},8000);
-
-init();
+// ==================================

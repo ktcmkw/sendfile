@@ -86,12 +86,19 @@ app.use((req, res, next) => { req.io = io; next(); });
 async function auth(req, res, next) {
   const h = req.headers['authorization'];
   if (!h?.startsWith('Bearer ')) return res.status(401).json({ error: 'ไม่ได้เข้าสู่ระบบ' });
+  // Step 1: verify JWT (auth error = 401)
+  let payload;
+  try { payload = jwt.verify(h.slice(7), process.env.JWT_SECRET); }
+  catch { return res.status(401).json({ error: 'Token หมดอายุ กรุณาเข้าสู่ระบบใหม่' }); }
+  // Step 2: fetch user from DB (DB error = 503, NOT 401 — prevents false logout)
   try {
-    const payload = jwt.verify(h.slice(7), process.env.JWT_SECRET);
     const { rows } = await query('SELECT * FROM users WHERE username=$1', [payload.username]);
-    if (!rows.length) return res.status(401).json({ error: 'ไม่พบผู้ใช้' });
+    if (!rows.length) return res.status(401).json({ error: 'ไม่พบผู้ใช้ในระบบ' });
     req.user = rows[0]; next();
-  } catch { res.status(401).json({ error: 'Token หมดอายุ กรุณาเข้าสู่ระบบใหม่' }); }
+  } catch(e) {
+    console.error('[auth] DB error:', e.message);
+    return res.status(503).json({ error: 'ระบบฐานข้อมูลชั่วคราวไม่พร้อมใช้งาน กรุณาลองใหม่' });
+  }
 }
 function admin(req, res, next) {
   // Only the built-in 'admin' role can access Admin Panel
@@ -235,7 +242,11 @@ app.post('/api/auth/passkey-only', async (req, res) => {
       const ok = await bcrypt.compare(passkey, user.passkey_hash);
       if (ok) {
         await auditLog('login_passkey', user.username, null, {}, req.ip);
-        return res.json({ token: tok(user.username), username: user.username, role: user.role_id });
+        return res.json({
+          token: tok(user.username), username: user.username, role: user.role_id,
+          user: { username: user.username, fullName: user.full_name, email: user.email,
+                  department: user.department, location: user.location, role: user.role_id }
+        });
       }
     }
     await auditLog('login_passkey_fail', 'unknown', null, {}, req.ip);
@@ -829,6 +840,27 @@ app.get('/api/settings/audit-log', auth, admin, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── DB diagnostic (admin only) ──────────────────────────────────────────────
+// GET /api/admin/db-info — shows which Neon host/branch the server is actually connected to
+app.get('/api/admin/db-info', auth, admin, async (req, res) => {
+  try {
+    const dbUrl = process.env.DATABASE_URL || '';
+    let hostInfo = '(DATABASE_URL not set)';
+    try {
+      const u = new URL(dbUrl);
+      hostInfo = u.hostname + u.pathname;
+    } catch(_) { hostInfo = '(cannot parse URL)'; }
+    const { rows: uRows } = await query('SELECT username, role_id FROM users ORDER BY created_at ASC');
+    const { rows: dRows } = await query('SELECT COUNT(*) FROM documents');
+    res.json({
+      dbHost: hostInfo,
+      userCount: uRows.length,
+      users: uRows.map(u => ({ username: u.username, role: u.role_id })),
+      docCount: Number(dRows[0].count)
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Clear data (admin only, requires passkey) ───────────────────────────────
 app.post('/api/admin/clear-docs', auth, admin, async (req, res) => {
   try {
@@ -919,7 +951,7 @@ initDB()
   .then(() => {
     httpServer.listen(PORT, () =>
       console.log(`✅ SendFile → http://localhost:${PORT}`));
-    // Run cleanup immediately then every 24h
+    // Run cl    // Run cleanup once on startup, then every 24h
     cleanupExpiredDocs();
     setInterval(cleanupExpiredDocs, 24 * 60 * 60 * 1000);
   })
