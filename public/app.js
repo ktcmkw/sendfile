@@ -74,7 +74,7 @@ function clearRememberAuth() {
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
 // stale K.* localStorage keys so mobile browsers don't show old data
-const APP_VERSION = 'v7-20260510';
+const APP_VERSION = 'v8-20260510'; // bump → clears stale hardcoded locations/depts
 (function clearCacheOnVersionChange() {
   const stored = localStorage.getItem('sf_app_version');
   if (stored !== APP_VERSION) {
@@ -2590,25 +2590,58 @@ async function addDept(){
   const name=(prompt('ชื่อแผนกใหม่:','')||'').trim();
   if(!name) return;
   const res=await apiCall('POST','/api/departments',{name});
-  if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('เพิ่มแผนกแล้ว');}
-  else showToast(res?.error||'เพิ่มไม่สำเร็จ','error');
+  if(res?.ok){
+    // Optimistic update: add to local cache immediately
+    const cur=getDepartments();
+    if(!cur.includes(name)){ cur.push(name); localStorage.setItem(K.depts,JSON.stringify(cur)); }
+    renderAdminTab('storage');
+    showToast('เพิ่มแผนกแล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast(res?.error||'เพิ่มไม่สำเร็จ','error');
 }
 async function confirmRenameDept(input, oldName){
   const newName=(input.value||'').trim();
   if(!newName||newName===oldName){cancelRename(input,oldName);return;}
   const res=await apiCall('PUT','/api/departments/'+encodeURIComponent(oldName),{name:newName});
-  if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('เปลี่ยนชื่อแล้ว');}
-  else showToast(res?.error||'แก้ไขไม่สำเร็จ','error');
+  if(res?.ok){
+    localStorage.setItem(K.depts, JSON.stringify(getDepartments().map(d=>d===oldName?newName:d)));
+    renderAdminTab('storage');
+    showToast('เปลี่ยนชื่อแล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast(res?.error||'แก้ไขไม่สำเร็จ','error');
 }
 async function removeDept(name){
   if(!confirm('ลบแผนก "'+name+'"? \nUser ที่อยู่ในแผนกนี้จะยังคงมีค่าแผนกเดิม')) return;
   const res=await apiCall('DELETE','/api/departments/'+encodeURIComponent(name));
-  if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('ลบแผนกแล้ว');}
-  else showToast(res?.error||'ลบไม่สำเร็จ','error');
+  if(res?.ok){
+    localStorage.setItem(K.depts, JSON.stringify(getDepartments().filter(d=>d!==name)));
+    renderAdminTab('storage');
+    showToast('ลบแผนกแล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast(res?.error||'ลบไม่สำเร็จ','error');
 }
-async function addLocation(){ const n=prompt('ชื่อสถานที่จัดเก็บ:',''); if(!n||!n.trim())return; const res=await apiCall('POST','/api/locations',{name:n.trim()}); if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('เพิ่มสถานที่แล้ว');}else{showToast(res?.error||'เพิ่มไม่สำเร็จ','error');}}
-async function removeLocation(name){ if(!confirm(`ลบ "${name}" ?
-เอกสารที่เก็บที่นี่จะยังคงอยู่`))return; const res=await apiCall('DELETE','/api/locations/'+encodeURIComponent(name)); if(res?.ok){await syncFromServer();renderAdminTab('storage');showToast('ลบสถานที่แล้ว');}else{showToast('ลบไม่สำเร็จ','error');}}
+async function addLocation(){
+  const n=(prompt('ชื่อสถานที่จัดเก็บ:','')||'').trim();
+  if(!n) return;
+  const res=await apiCall('POST','/api/locations',{name:n});
+  if(res?.ok){
+    const cur=getLocations();
+    if(!cur.includes(n)){ cur.push(n); localStorage.setItem(K.locs,JSON.stringify(cur)); }
+    renderAdminTab('storage');
+    showToast('เพิ่มสถานที่แล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast(res?.error||'เพิ่มไม่สำเร็จ','error');
+}
+async function removeLocation(name){
+  if(!confirm('ลบ "'+name+'" ?\nเอกสารที่เก็บที่นี่จะยังคงอยู่')) return;
+  const res=await apiCall('DELETE','/api/locations/'+encodeURIComponent(name));
+  if(res?.ok){
+    localStorage.setItem(K.locs, JSON.stringify(getLocations().filter(l=>l!==name)));
+    renderAdminTab('storage');
+    showToast('ลบสถานที่แล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast('ลบไม่สำเร็จ','error');
+}
 
 // ─── Location inline rename helpers ───────────────────────────────
 function startRename(btn, oldName){
@@ -2638,9 +2671,11 @@ async function confirmRename(inp, oldName){
   if(newName === oldName){ cancelRename(inp, oldName); return; }
   const res = await apiCall('PUT','/api/locations/'+encodeURIComponent(oldName),{newName});
   if(res?.ok){
-    showToast(`เปลี่ยนชื่อ "${oldName}" → "${newName}" เรียบร้อย — อัพเดทเอกสารและ User ทั้งหมดแล้ว`);
-    await syncFromServer();
-    renderAdminTab('settings');
+    // Optimistic update local cache immediately
+    localStorage.setItem(K.locs, JSON.stringify(getLocations().map(l=>l===oldName?newName:l)));
+    showToast(`เปลี่ยนชื่อ "${oldName}" → "${newName}" เรียบร้อย`);
+    renderAdminTab('storage');
+    syncFromServer().catch(()=>{});
   } else {
     showToast(res?.error||'เปลี่ยนชื่อไม่สำเร็จ','error');
     cancelRename(inp, oldName);
