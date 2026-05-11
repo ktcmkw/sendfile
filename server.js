@@ -128,7 +128,8 @@ async function pushNotif(io, { type, toUsername, fromUsername, fromFullName, mes
 const fmtUser = u => ({
   username: u.username, fullName: u.full_name, nickname: u.nickname||'', email: u.email,
   department: u.department, location: u.location, role: u.role_id,
-  passwordHash: u.password_hash, createdAt: Number(u.created_at)
+  createdAt: Number(u.created_at)
+  // passwordHash intentionally omitted — never expose hash to client
 });
 const fmtDoc = (d, stripBase64 = false) => ({
   id: d.id, title: d.title, contentType: d.content_type,
@@ -483,12 +484,31 @@ app.get('/api/docs', auth, async (req, res) => {
 // ─── All-docs metadata (no base64, for home log — visible to ALL users) ──────
 app.get('/api/docs/all-meta', auth, async (req, res) => {
   try {
-    const { rows } = await query(
-      'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
-      'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
-      'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
-      'FROM documents ORDER BY created_at DESC'
-    );
+    const u = req.user;
+    const { rows: rr } = await query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]);
+    const perms = rr[0]?.permissions || {};
+    let rows;
+    if (u.role_id === 'admin' || perms.can_view_all) {
+      // Admin sees all documents
+      const r = await query(
+        'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
+        'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
+        'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
+        'FROM documents ORDER BY created_at DESC'
+      );
+      rows = r.rows;
+    } else {
+      // Non-admin: only docs where user is sender, direct recipient, or dept recipient
+      const r = await query(
+        'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
+        'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
+        'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
+        'FROM documents WHERE sender_username=$1 OR recipient_username=$1 ' +
+        'OR (recipient_type=$2 AND recipient_department=$3) ORDER BY created_at DESC',
+        [u.username, 'department', u.department]
+      );
+      rows = r.rows;
+    }
     res.json(rows.map(fmtDocMeta));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -530,13 +550,19 @@ app.get('/api/docs/:id', auth, async (req, res) => {
 app.post('/api/docs', auth, async (req, res) => {
   try {
     const d = req.body;
+    // Security: override sender identity from JWT — never trust client-supplied sender fields
+    const sender = req.user;
+    const senderUsername   = sender.username;
+    const senderFullName   = sender.full_name || sender.fullName;
+    const senderDepartment = sender.department;
+    const senderLocation   = sender.location;
     await query(
       `INSERT INTO documents (id,title,content_type,content,sender_username,sender_full_name,
        sender_department,sender_location,recipient_type,recipient_username,recipient_department,
        recipient_full_name,priority,attachment_note,attachments,comments,created_at,status,qr_url)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'pending',$18)`,
-      [d.id, d.title, d.contentType, JSON.stringify(d.content), d.senderUsername,
-       d.senderFullName, d.senderDepartment, d.senderLocation, d.recipientType,
+      [d.id, d.title, d.contentType, JSON.stringify(d.content), senderUsername,
+       senderFullName, senderDepartment, senderLocation, d.recipientType,
        d.recipientUsername||null, d.recipientDepartment||null, d.recipientFullName||null,
        d.priority||'normal', d.attachmentNote||null,
        JSON.stringify(d.attachments||[]), JSON.stringify(d.comments||[]),
@@ -546,9 +572,7 @@ app.post('/api/docs', auth, async (req, res) => {
     const { rows } = await query('SELECT * FROM documents WHERE id=$1', [d.id]);
     const doc = fmtDoc(rows[0]);
     // Emit to sender and recipient only (not broadcast to everyone)
-    const senderRoom   = d.senderUsername;
-    const recipientRoom = d.recipientType === 'user' ? d.recipientUsername : ('dept:' + d.recipientDepartment);
-    req.io.to(senderRoom).emit('doc_update', { type: 'created', doc });
+    req.io.to(senderUsername).emit('doc_update', { type: 'created', doc });
     if (d.recipientType === 'user' && d.recipientUsername) {
       req.io.to(d.recipientUsername).emit('doc_update', { type: 'created', doc });
     } else if (d.recipientType === 'department') {
@@ -561,7 +585,7 @@ app.post('/api/docs', auth, async (req, res) => {
       const { rows: rr } = await query('SELECT email,full_name FROM users WHERE username=$1', [d.recipientUsername]);
       if (rr[0]?.email) sendDocEmail(rr[0].email, rr[0].full_name, doc.senderFullName, doc, origin);
     } else if (d.recipientType === 'department') {
-      const { rows: deptUsers } = await query('SELECT email,full_name FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, d.senderUsername]);
+      const { rows: deptUsers } = await query('SELECT email,full_name FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, senderUsername]);
       for (const u of deptUsers) {
         if (u.email) sendDocEmail(u.email, u.full_name, doc.senderFullName, doc, origin);
       }
@@ -577,7 +601,7 @@ app.post('/api/docs', auth, async (req, res) => {
         message: `${doc.senderFullName} ส่งเอกสาร "${doc.title}" ให้คุณ` });
     } else if (d.recipientType === 'department') {
       const { rows: deptU } = await query(
-        'SELECT username FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, d.senderUsername]);
+        'SELECT username FROM users WHERE department=$1 AND username!=$2', [d.recipientDepartment, senderUsername]);
       for (const u of deptU) {
         await pushNotif(req.io, { ...base, type:'doc_sent', toUsername: u.username,
           message: `${doc.senderFullName} ส่งเอกสาร "${doc.title}" ให้แผนก ${d.recipientDepartment}` });
@@ -591,9 +615,18 @@ app.patch('/api/docs/:id/receive', auth, async (req, res) => {
   try {
     const { storageLocation, note } = req.body;
     const u = req.user; const now = Date.now();
-    const { rows: cur } = await query('SELECT comments FROM documents WHERE id=$1', [req.params.id]);
+    const { rows: cur } = await query('SELECT * FROM documents WHERE id=$1', [req.params.id]);
     if (!cur.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
-    const comments = [...(cur[0].comments || []),
+    // Access control: only the intended recipient (or admin) can mark as received
+    const rawDoc = cur[0];
+    const { rows: rr2 } = await query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]);
+    const perms2 = rr2[0]?.permissions || {};
+    const isRecipient = rawDoc.recipient_username === u.username ||
+      (rawDoc.recipient_type === 'department' && rawDoc.recipient_department === u.department);
+    if (!isRecipient && u.role_id !== 'admin' && !perms2.can_view_all) {
+      return res.status(403).json({ error: 'ไม่มีสิทธิ์รับเอกสารนี้' });
+    }
+    const comments = [...(rawDoc.comments || []),
       { username: u.username, fullName: u.full_name, text: '✅ ยืนยันรับเอกสาร — ' + note, createdAt: now }];
     await query(
       'UPDATE documents SET status=$1,received_at=$2,received_by=$3,storage_location=$4,comments=$5 WHERE id=$6',
@@ -620,9 +653,18 @@ app.patch('/api/docs/:id/receive', auth, async (req, res) => {
 app.post('/api/docs/:id/comments', auth, async (req, res) => {
   try {
     const u = req.user; const now = Date.now();
-    const { rows: cur } = await query('SELECT comments FROM documents WHERE id=$1', [req.params.id]);
+    const { rows: cur } = await query('SELECT * FROM documents WHERE id=$1', [req.params.id]);
     if (!cur.length) return res.status(404).json({ error: 'ไม่พบเอกสาร' });
-    const comments = [...(cur[0].comments || []),
+    // Access control: only sender, recipient, or admin can comment
+    const docC = cur[0];
+    const { rows: rrC } = await query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]);
+    const permsC = rrC[0]?.permissions || {};
+    const canComment = u.role_id === 'admin' || permsC.can_view_all ||
+      docC.sender_username === u.username ||
+      docC.recipient_username === u.username ||
+      (docC.recipient_type === 'department' && docC.recipient_department === u.department);
+    if (!canComment) return res.status(403).json({ error: 'ไม่มีสิทธิ์แสดงความคิดเห็นในเอกสารนี้' });
+    const comments = [...(docC.comments || []),
       { username: u.username, fullName: u.full_name, text: req.body.text, createdAt: now }];
     await query('UPDATE documents SET comments=$1 WHERE id=$2', [JSON.stringify(comments), req.params.id]);
     req.io.emit('doc_update', { type: 'comment', docId: req.params.id, comments });
@@ -801,7 +843,8 @@ app.get('/api/notifs', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/notifs', auth, async (req, res) => {
+app.post('/api/notifs', auth, admin, async (req, res) => {
+  // Admin-only: server uses pushNotif() internally; external POST requires admin role
   try {
     const n = req.body;
     await query(

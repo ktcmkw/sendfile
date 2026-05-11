@@ -74,7 +74,7 @@ function clearRememberAuth() {
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
 // stale K.* localStorage keys so mobile browsers don't show old data
-const APP_VERSION = 'v8-20260510'; // bump → clears stale hardcoded locations/depts
+const APP_VERSION = 'v8-20260511'; // bump → clears stale hardcoded locations/depts
 (function clearCacheOnVersionChange() {
   const stored = localStorage.getItem('sf_app_version');
   if (stored !== APP_VERSION) {
@@ -916,6 +916,7 @@ function renderNotifs(){
     }).catch(()=>{});
   }
   const user = getCurrentUser();
+  if(!user){ document.getElementById('page-body').innerHTML='<div class="empty-state">กรุณา Login ใหม่</div>'; return; }
   const myNotifs = getMyNotifs(user.username);
   const unreadCount = myNotifs.filter(n=>!n.read).length;
   const isAdmin = hasAdminAccess(user);
@@ -1600,6 +1601,8 @@ function enterDashboard(user){
 let currentPage='home';
 function navigate(page,params={}){
   currentPage=page;
+  // Clear any running refresh countdown on page navigation
+  if(_countdownInterval){ clearInterval(_countdownInterval); _countdownInterval=null; }
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.remove('active'));
   const navEl=document.getElementById('nav-'+page);
   if(navEl) navEl.classList.add('active');
