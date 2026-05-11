@@ -90,3 +90,25 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO settings (key, value) VALUES
   ('gdrive', '{"enabled":false,"clientId":"","folderId":""}')
 ON CONFLICT (key) DO NOTHING;
+
+
+-- v8 migrations (sync with db.js initDB)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_hash VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(100) DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS departments (
+  id   SERIAL PRIMARY KEY,
+  name VARCHAR(100) UNIQUE NOT NULL
+);
+
+-- Performance indexes
+CREATE INDEX IF NOT EXISTS idx_docs_sender       ON documents(sender_username);
+CREATE INDEX IF NOT EXISTS idx_docs_recipient    ON documents(recipient_username);
+CREATE INDEX IF NOT EXISTS idx_docs_status       ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_docs_created_at   ON documents(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_docs_dept         ON documents(recipient_department);
+CREATE INDEX IF NOT EXISTS idx_notifs_to         ON notifications(to_username);
+CREATE INDEX IF NOT EXISTS idx_notifs_read       ON notifications(read);
+CREATE INDEX IF NOT EXISTS idx_users_dept        ON users(department);
+CREATE INDEX IF NOT EXISTS idx_audit_username    ON audit_log(username);
+CREATE INDEX IF NOT EXISTS idx_audit_created_at  ON audit_log(created_at DESC);

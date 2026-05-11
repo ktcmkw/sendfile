@@ -8,6 +8,15 @@ const path       = require('path');
 const { initDB, query, auditLog } = require('./db');
 const nodemailer = require('nodemailer');
 const { v2: cloudinary } = require('cloudinary');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 นาที
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
+});
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
@@ -52,9 +61,19 @@ async function sendDocEmail(recipientEmail, recipientName, senderName, doc, base
 
 const app        = express();
 const httpServer = createServer(app);
-const io         = new Server(httpServer, { cors: { origin: '*' } });
+app.use(helmet({ contentSecurityPolicy: false }));
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
+const io         = new Server(httpServer, {
+  cors: { origin: (origin, cb) => { if (!origin || ALLOWED_ORIGINS.some(o=>origin.startsWith(o.trim()))) cb(null,true); else cb(new Error('Not allowed')); } }
+});
 
-app.use(express.json({ limit: '50mb' }));
+app.use((req, res, next) => {
+  if (req.path === '/api/upload' || req.path === '/api/docs') {
+    express.json({ limit: '50mb' })(req, res, next);
+  } else {
+    express.json({ limit: '1mb' })(req, res, next);
+  }
+});
 // Serve static: support both public/ folder and root index.html
 const fs = require('fs');
 const PUBLIC_DIR = fs.existsSync(path.join(__dirname,'public')) ? path.join(__dirname,'public') : __dirname;
@@ -180,10 +199,11 @@ const fmtDocMeta = d => ({
 // ═══════════════════════════════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════════════════════════════
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     const { username, fullName, nickname, email, department, location, password } = req.body;
     if (!username || !fullName || !password) return res.status(400).json({ error: 'กรอกข้อมูลไม่ครบ' });
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
     const dup = await query('SELECT 1 FROM users WHERE username=$1', [username]);
     if (dup.rows.length) return res.status(409).json({ error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว' });
     const hash = await bcrypt.hash(password, 10);
@@ -200,7 +220,7 @@ app.post('/api/auth/register', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
     const { rows } = await query('SELECT * FROM users WHERE username=$1', [username]);
@@ -235,7 +255,7 @@ app.post('/api/auth/passkey-setup', auth, async (req, res) => {
 });
 
 // ─── Passkey-only login (no username needed) ──────────────────────────────────
-app.post('/api/auth/passkey-only', async (req, res) => {
+app.post('/api/auth/passkey-only', authLimiter, async (req, res) => {
   try {
     const { passkey } = req.body;
     if (!passkey || !/^\d{6}$/.test(passkey)) return res.status(400).json({ error: 'Passkey ต้องเป็นตัวเลข 6 หลัก' });
@@ -318,7 +338,7 @@ app.delete('/api/auth/passkey/:username', auth, admin, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/auth/passkey-login', async (req, res) => {
+app.post('/api/auth/passkey-login', authLimiter, async (req, res) => {
   try {
     const { username, passkey } = req.body;
     if (!username || !passkey) return res.status(400).json({ error: 'กรุณากรอกข้อมูลให้ครบ' });
@@ -428,7 +448,7 @@ app.put('/api/users/:username', auth, admin, async (req, res) => {
   try {
     const { fullName, nickname, email, department, location, role, password } = req.body;
     const uname = req.params.username;
-    if (password?.length >= 4) {
+    if (password?.length >= 8) {
       const hash = await bcrypt.hash(password, 10);
       await query('UPDATE users SET full_name=$1,nickname=$2,email=$3,department=$4,location=$5,role_id=$6,password_hash=$7 WHERE username=$8',
         [fullName, nickname||'', email, department, location, role, hash, uname]);
@@ -658,6 +678,11 @@ app.post('/api/docs/:id/comments', auth, async (req, res) => {
 app.patch('/api/docs/:id/drive', auth, async (req, res) => {
   try {
     const { driveId, driveUrl } = req.body;
+    const { rows: docRows } = await query('SELECT sender_username FROM documents WHERE id=$1', [req.params.id]);
+    if (!docRows[0]) return res.status(404).json({ error: 'Not found' });
+    if (docRows[0].sender_username !== req.user.username && req.user.role_id !== 'admin') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     await query('UPDATE documents SET drive_id=$1,drive_url=$2 WHERE id=$3', [driveId, driveUrl, req.params.id]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -862,6 +887,13 @@ app.post('/api/notifs', auth, async (req, res) => {
   // Auth-only: used by client addNotif() helper; server also uses pushNotif() internally
   try {
     const n = req.body;
+    // Security: fromUsername must match authenticated user; non-admin cannot broadcast
+    if (n.fromUsername && n.fromUsername !== req.user.username) {
+      return res.status(403).json({ error: 'Cannot impersonate sender' });
+    }
+    if (n.toUsername === '__all__' && req.user.role_id !== 'admin') {
+      return res.status(403).json({ error: 'Broadcast requires admin' });
+    }
     await query(
       `INSERT INTO notifications (id,type,to_username,from_username,from_full_name,message,doc_id,doc_title,created_at,read)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,false)`,
@@ -1109,7 +1141,18 @@ app.post('/api/admin/clear-notifs', auth, admin, async (req, res) => {
 // SOCKET.IO
 // ═══════════════════════════════════════════════════════════════════
 io.on('connection', socket => {
-  socket.on('join', async (username) => {
+  socket.on('join', async (data) => {
+    // Support both legacy string and new {username, token} format
+    const username = typeof data === 'string' ? data : data?.username;
+    const token    = typeof data === 'string' ? null  : data?.token;
+    if (!username) return;
+    // Verify JWT if token provided (new clients); legacy fallback: room join only
+    if (token) {
+      try {
+        const payload = jwt.verify(token, process.env.JWT_SECRET);
+        if (payload.username !== username) return; // token mismatch — reject
+      } catch(_) { return; } // invalid token — reject
+    }
     socket.join(username);
     socket.join('broadcast');
     // Join department room + admin room for targeted emits

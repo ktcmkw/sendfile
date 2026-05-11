@@ -141,7 +141,7 @@ function clearRememberAuth() {
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
 // stale K.* localStorage keys so mobile browsers don't show old data
-const APP_VERSION = 'v8-20260511d'; // bump → clears stale hardcoded locations/depts
+const APP_VERSION = 'v8-20260511e'; // bump → clears stale hardcoded locations/depts
 (function clearCacheOnVersionChange() {
   const stored = localStorage.getItem('sf_app_version');
   if (stored !== APP_VERSION) {
@@ -332,13 +332,13 @@ function connectSocket(username) {
     });
 
     // join room immediately
-    _socket.emit('join', username);
+    _socket.emit('join', { username, token: _jwt });
 
     // 'connect' fires on BOTH initial connect AND every reconnect in Socket.io v4
     // Note: socket.on('reconnect') does NOT fire in v4 — must use 'connect' instead
     let _isFirstConnect = true;
     _socket.on('connect', async () => {
-      _socket.emit('join', username);
+      _socket.emit('join', { username, token: _jwt });
       if (_isFirstConnect) {
         // Initial connect — data already synced at login, skip re-sync
         _isFirstConnect = false;

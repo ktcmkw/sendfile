@@ -26,6 +26,14 @@ async function initDB() {
     }
     console.log('✅ Default departments seeded');
   }
+  // Performance indexes
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_docs_sender ON documents(sender_username)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_docs_recipient ON documents(recipient_username)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_docs_status ON documents(status)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_docs_created_at ON documents(created_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_notifs_to ON notifications(to_username)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_notifs_read ON notifications(read)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_users_dept ON users(department)');
   console.log('✅ Database initialized');
 }
 
