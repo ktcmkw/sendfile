@@ -47,20 +47,43 @@ function applyColorTheme(theme){
     document.documentElement.classList.remove('theme-rainbow');
   }
   localStorage.setItem(THEME_KEY, theme);
-  // Highlight active swatch with inset ring
+  // Highlight active swatch (inner <span> inside popup buttons)
   Object.keys(COLOR_THEMES).forEach(k=>{
     const sw=document.getElementById('tswatch-'+k);
     if(sw){
-      sw.style.borderColor = (k===theme)?'rgba(255,255,255,0.9)':'transparent';
-      sw.style.boxShadow   = (k===theme)?'0 0 0 2px rgba(255,255,255,0.3) inset':'none';
-      sw.style.transform   = (k===theme)?'scaleY(1.08)':'';
+      const dot=sw.querySelector('span:first-child')||sw;
+      dot.style.borderColor=(k===theme)?'rgba(255,255,255,0.9)':'transparent';
+      dot.style.boxShadow=(k===theme)?'0 0 0 3px rgba(255,255,255,0.25)':'none';
+      dot.style.transform=(k===theme)?'scale(1.18)':'scale(1)';
     }
   });
+  // Sync color-picker-dot in sidebar button
+  const pickerDot=document.getElementById('color-picker-dot');
+  if(pickerDot) pickerDot.style.background=t.blue;
 }
 
 function initColorTheme(){
   const saved = localStorage.getItem(THEME_KEY) || 'red';
   applyColorTheme(saved);
+}
+
+function toggleColorPicker(e){
+  if(e) e.stopPropagation();
+  const popup=document.getElementById('color-picker-popup');
+  if(!popup) return;
+  const isOpen=popup.style.display!=='none';
+  popup.style.display=isOpen?'none':'block';
+  // ปิดเมื่อคลิกนอก popup
+  if(!isOpen){
+    setTimeout(()=>{
+      document.addEventListener('click', function handler(ev){
+        if(!popup.contains(ev.target)){
+          popup.style.display='none';
+          document.removeEventListener('click',handler);
+        }
+      });
+    },10);
+  }
 }
 
 // ── 24h Doc-preview session helpers ─────────────────────────────
@@ -203,6 +226,7 @@ let _socket = null;
 let _pollInterval = null;
 let _lastSyncTime = 0;
 const _refreshCooldowns = {}; // keyed by page name, value = last refresh timestamp
+let _dbSyncRunning = false; // ป้องกัน force_sync socket re-render ระหว่าง DB Sync
 function canRefreshPage(page){ return Date.now() - (_refreshCooldowns[page]||0) > 30000; }
 function markRefreshed(page){ _refreshCooldowns[page]=Date.now(); startRefreshCountdown(page); }
 function refreshCooldownSecs(page){ return Math.max(0,30-Math.round((Date.now()-(_refreshCooldowns[page]||0))/1000)); }
@@ -381,7 +405,7 @@ function connectSocket(username) {
     _socket.on('force_sync', async () => {
       await syncFromServer();
       updateNotifBadge(); updateInboxBadge();
-      if(['inbox','outbox','home','notifs','admin'].includes(currentPage)) navigate(currentPage);
+      if(!_dbSyncRunning && ['inbox','outbox','home','notifs','admin'].includes(currentPage)) navigate(currentPage);
     });
   } catch(e) { console.warn('Socket.io connect failed, using polling only:', e); }
 }
@@ -2772,28 +2796,28 @@ function renderAdminTab(tab){
     `;
   }
   if(tab==='dbsync'){
-    content=`<div style="max-width:680px;margin:0 auto;padding:4px 0;">
-      <div style="background:linear-gradient(135deg,var(--blue,#3b82f6) 0%,var(--blue-dk,#1d4ed8) 100%);border-radius:16px;padding:24px 28px;margin-bottom:20px;color:#fff;position:relative;overflow:hidden;">
-        <div style="position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.08);"></div>
-        <div style="position:absolute;right:20px;top:50%;transform:translateY(-50%);font-size:48px;opacity:0.25;">🗄️</div>
-        <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;opacity:0.75;text-transform:uppercase;margin-bottom:6px;">Neon PostgreSQL</div>
-        <div style="font-size:20px;font-weight:800;margin-bottom:4px;">ดึงข้อมูลจาก Neon DB</div>
-        <div style="font-size:13px;opacity:0.8;">Force Sync — ดึงข้อมูลล่าสุดจาก PostgreSQL และส่ง socket ไปทุก client</div>
-      </div>
-      <div style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:10px;padding:10px 16px;margin-bottom:20px;display:flex;align-items:center;gap:10px;font-size:13px;color:#92400e;">
-        <span style="font-size:16px;">⚠️</span>
-        <span>ระบบจะส่งสัญญาณ <code style="background:rgba(0,0,0,0.06);padding:1px 6px;border-radius:4px;">force_sync</code> ไปยังทุก client ที่เปิดอยู่</span>
-      </div>
-      <button class="btn-primary" id="db-sync-btn" onclick="runDbSync()" style="width:100%;padding:14px;font-size:15px;font-weight:700;border-radius:12px;margin-bottom:20px;letter-spacing:0.3px;">
-        🔄 ดึงข้อมูลจาก Neon DB ทันที
-      </button>
-      <div id="db-sync-log" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-sm);">
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
-          <span style="font-size:13px;font-weight:700;color:var(--text);">📊 ผลการดึงข้อมูล</span>
-          <span id="dsync-time-badge" style="margin-left:auto;font-size:11px;padding:3px 10px;border-radius:20px;background:var(--blue-lt,rgba(59,130,246,0.1));color:var(--blue,#3b82f6);font-weight:600;"></span>
+    content=`<div style="max-width:560px;margin:0 auto;padding:8px 0;">
+      <!-- compact header row -->
+      <div style="display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--shadow-sm);">
+        <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--blue),var(--blue-dk));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">🗄️</div>
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:2px;">ดึงข้อมูลจาก Neon DB</div>
+          <div style="font-size:12px;color:var(--muted);">Force Sync — ดึงข้อมูลล่าสุดจาก PostgreSQL และส่ง socket ไปทุก client</div>
         </div>
-        <div id="dsync-rows" style="padding:8px 0;"></div>
-        <div id="dsync-total" style="padding:12px 18px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);"></div>
+        <button class="btn-primary" id="db-sync-btn" onclick="runDbSync()" style="padding:9px 18px;font-size:13px;white-space:nowrap;flex-shrink:0;">🔄 Sync ทันที</button>
+      </div>
+      <!-- warning note -->
+      <div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:10px;padding:9px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);">
+        <span>⚠️</span><span>ระบบจะส่งสัญญาณ <code style="background:rgba(0,0,0,0.06);padding:1px 5px;border-radius:4px;font-size:11px;">force_sync</code> ไปยังทุก client ที่เปิดอยู่</span>
+      </div>
+      <!-- log panel -->
+      <div id="db-sync-log" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-sm);">
+        <div style="padding:11px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:13px;font-weight:700;color:var(--text);flex:1;">📊 ผลการดึงข้อมูล</span>
+          <span id="dsync-time-badge" style="font-size:11px;padding:2px 9px;border-radius:20px;background:var(--blue-lt);color:var(--blue);font-weight:600;"></span>
+        </div>
+        <div id="dsync-rows" style="padding:4px 0;"></div>
+        <div id="dsync-total" style="padding:10px 16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);"></div>
       </div>
     </div>`;
   }
@@ -2807,6 +2831,7 @@ async function runDbSync(){
   const logEl=document.getElementById('db-sync-log');
   if(!btn||!logEl) return;
   // Clear and reset on every click
+  _dbSyncRunning=true;
   btn.disabled=true; btn.innerHTML='⏳ กำลังดึงข้อมูล...';
   logEl.style.display='block';
   const items=[
@@ -2866,6 +2891,7 @@ async function runDbSync(){
     items.forEach(it=>setVal(it.key,'❌',false));
     document.getElementById('dsync-total').textContent='Error: '+e.message;
   } finally {
+    _dbSyncRunning=false;
     btn.disabled=false; btn.innerHTML='🔄 ดึงข้อมูลจาก Neon DB ทันที';
   }
 }
