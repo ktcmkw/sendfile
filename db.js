@@ -11,6 +11,7 @@ async function initDB() {
   const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
   await pool.query(schema);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_hash VARCHAR(255);');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(100) DEFAULT \'\';');
   // Departments table
   await pool.query(`CREATE TABLE IF NOT EXISTS departments (
     id SERIAL PRIMARY KEY,

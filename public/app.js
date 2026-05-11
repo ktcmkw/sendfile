@@ -164,6 +164,30 @@ let _socket = null;
 // ── Polling fallback: sync every 15s (Socket.io handles real-time; poll is safety net) ──
 let _pollInterval = null;
 let _lastSyncTime = 0;
+const _refreshCooldowns = {}; // keyed by page name, value = last refresh timestamp
+function canRefreshPage(page){ return Date.now() - (_refreshCooldowns[page]||0) > 30000; }
+function markRefreshed(page){ _refreshCooldowns[page]=Date.now(); }
+function refreshCooldownSecs(page){ return Math.max(0,30-Math.round((Date.now()-(_refreshCooldowns[page]||0))/1000)); }
+async function forceRefreshPage(page){
+  if(!canRefreshPage(page)){ showToast('กรุณารอ '+refreshCooldownSecs(page)+' วินาที ก่อนรีเฟรชอีกครั้ง','error'); return; }
+  markRefreshed(page);
+  const btn=document.getElementById('page-refresh-btn');
+  if(btn){ btn.disabled=true; btn.textContent='\u{1F504} กำลังโหลด...'; }
+  try {
+    const data=await apiCall('GET','/api/docs/all-meta');
+    if(Array.isArray(data)){ localStorage.setItem(K.docs,JSON.stringify(data)); _lastSyncTime=Date.now(); }
+    const notifData=await apiCall('GET','/api/notifs');
+    if(Array.isArray(notifData)){ localStorage.setItem(K.notifs,JSON.stringify(notifData)); }
+    const userData=await apiCall('GET','/api/users');
+    if(Array.isArray(userData)){ localStorage.setItem(K.users,JSON.stringify(userData)); }
+  } catch(e){}
+  if(page==='home') await renderHome();
+  else if(page==='outbox') renderOutbox();
+  else if(page==='inbox') renderInbox();
+  else if(page==='admin') renderAdmin();
+  else if(page==='notifs') renderNotifs();
+  updateNotifBadge();
+}
 function startPolling() {
   if (_pollInterval) clearInterval(_pollInterval);
   _pollInterval = setInterval(async () => {
@@ -627,6 +651,24 @@ async function deleteDoc(id){
 }
 
 // ─── Admin: clear another user's passkey ──────────────────────────
+// ─── Admin: set passkey for another user ──────────────────────────
+function adminSetPasskeyModal(username){
+  openModal('🔑 ตั้ง Passkey ให้ '+username,
+    `<div class="form-group"><label>Passkey ใหม่ (6 หลัก)</label>
+     <input id="admin-new-passkey" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:4px;text-align:center;font-size:20px;"></div>
+     <div style="font-size:12px;color:var(--muted);margin-top:4px;">Admin สามารถตั้ง Passkey ให้ผู้ใช้ได้โดยไม่ต้องยืนยัน</div>`,
+    `<button class="btn-outline" onclick="closeModal()">ยกเลิก</button>
+     <button class="btn-primary" onclick="doAdminSetPasskey('${username}')">🔑 ตั้ง Passkey</button>`);
+}
+async function doAdminSetPasskey(username){
+  const newPasskey=(document.getElementById('admin-new-passkey')?.value||'').trim();
+  if(!newPasskey||!/^\d{6}$/.test(newPasskey)){ showToast('Passkey ต้องเป็นตัวเลข 6 หลัก','error'); return; }
+  const res=await apiCall('PUT',`/api/users/${username}/admin-reset-passkey`,{newPasskey});
+  closeModal();
+  if(res?.ok){ showToast(`ตั้ง Passkey ให้ ${username} เรียบร้อย ✅`,'success'); }
+  else { showToast('ไม่สำเร็จ','error'); }
+}
+
 async function adminClearPasskey(username){
   if(!confirm(`ล้าง Passkey ของ @${username} ?
 ผู้ใช้จะต้องตั้งใหม่เอง`)) return;
@@ -801,6 +843,16 @@ async function markAllNotifsRead(){
   await apiCall('PATCH','/api/notifs/read-all');
   await syncFromServer(); updateNotifBadge();
 }
+function displayName(u){
+  if(!u) return '';
+  if(u.nickname) return escapeHtml(u.nickname)+' <span style="font-size:0.85em;color:var(--muted);">('+escapeHtml(u.fullName)+')</span>';
+  return escapeHtml(u.fullName);
+}
+function displayNamePlain(u){
+  if(!u) return '';
+  return u.nickname ? u.nickname+' ('+u.fullName+')' : u.fullName;
+}
+
 function notifIcon(type){return{admin_broadcast:'📢',doc_sent:'📨',doc_sent_log:'📤',doc_received:'✅',doc_received_log:'📥',doc_deleted:'🗑️',system:'ℹ️'}[type]||'🔔';}
 function notifTypeLabel(type){return{admin_broadcast:'ประกาศจาก Admin',doc_sent:'ได้รับเอกสารใหม่',doc_sent_log:'คุณส่งเอกสาร',doc_received:'ผู้รับยืนยันรับแล้ว',doc_received_log:'คุณรับเอกสาร',doc_deleted:'เอกสารถูกลบ',system:'แจ้งเตือนระบบ'}[type]||'แจ้งเตือน';}
 
@@ -1162,6 +1214,7 @@ async function handleRegister(){
   const username=document.getElementById('r-username').value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
   const email=document.getElementById('r-email').value.trim();
   const fullName=document.getElementById('r-fullname').value.trim();
+  const nickname=document.getElementById('r-nickname')?.value.trim()||'';
   const department=document.getElementById('r-dept').value.trim();
   const location=document.getElementById('r-location').value;
   const password=document.getElementById('r-password').value;
@@ -1180,7 +1233,7 @@ async function handleRegister(){
   try {
     const r = await fetch('/api/auth/register', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({username,fullName,email,department,location,password})
+      body: JSON.stringify({username,fullName,nickname,email,department,location,password})
     });
     const data = await r.json();
     if(!r.ok){ regErrMsg = data.error || 'สมัครไม่สำเร็จ'; } else { res = data; }
@@ -1190,7 +1243,7 @@ async function handleRegister(){
   // Auto-login after registration
   _jwt = res.token; sessionStorage.setItem(_JWT_KEY, _jwt);
   // Seed K.users immediately — getCurrentUser() must never return null even if sync fails
-  const regUserData = res.user || { username, fullName, email, department, location, role: res.role };
+  const regUserData = res.user || { username, fullName, nickname, email, department, location, role: res.role };
   seedCurrentUser(regUserData);
   showAuthAlert('กำลังโหลดข้อมูล...','');
   await syncFromServer();
@@ -1682,6 +1735,13 @@ async function renderHome(){
       }).join('');
 
   document.getElementById('page-body').innerHTML=`
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+      <button id="page-refresh-btn" onclick="forceRefreshPage('home')"
+        style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;"
+        ${canRefreshPage('home')?'':'disabled'}>
+        🔄 ${canRefreshPage('home')?'รีเฟรช':'รออีก '+refreshCooldownSecs('home')+' วิ'}
+      </button>
+    </div>
   <div class="stats-grid">
     <div class="stat-card c-blue ${cs}" ${sa('members')}>
       <div class="stat-icon">👥</div><div class="stat-num">${totalUsers}</div>
@@ -1841,7 +1901,7 @@ function renderWizard(){
   } else if(wz.step===2){
     const users=getUsers().filter(u=>u.username!==getCurrentUser().username);
     const depts=getDepartments(); // use admin-managed department list
-    const userOpts=users.map(u=>`<option value="user:${escapeHtml(u.username)}" ${wz.recipient==='user:'+u.username?'selected':''}>${escapeHtml(u.fullName)} (${escapeHtml(u.department)})</option>`).join('');
+    const userOpts=users.map(u=>`<option value="user:${escapeHtml(u.username)}" ${wz.recipient==='user:'+u.username?'selected':''}>${displayNamePlain(u)} (${escapeHtml(u.department)})</option>`).join('');
     const deptOpts=depts.map(d=>`<option value="dept:${escapeHtml(d)}" ${wz.recipient==='dept:'+d?'selected':''}>${escapeHtml(d)} (ทั้งแผนก)</option>`).join('');
     body=`
     <div class="info-box">📋 เอกสาร: <strong>${escapeHtml(wz.title||'(ยังไม่มีชื่อ)')}</strong> · โหมด: ${wz.mode==='form'?'กรอกข้อมูล':'ตาราง'}</div>
@@ -2055,6 +2115,13 @@ function renderOutbox(){
   const selDoc=outboxSelected?getDocById(outboxSelected):null;
   document.getElementById('page-body').innerHTML=`
   <div class="outbox-stats">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+      <button id="page-refresh-btn" onclick="forceRefreshPage('outbox')"
+        style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;"
+        ${canRefreshPage('outbox')?'':'disabled'}>
+        🔄 ${canRefreshPage('outbox')?'รีเฟรช':'รออีก '+refreshCooldownSecs('outbox')+' วิ'}
+      </button>
+    </div>
     <div class="outbox-stat${outboxFilter==='all'?' active':''}" onclick="outboxFilter='all';outboxSelected=null;renderOutbox()">
       <div class="os-icon total">📤</div>
       <div><div class="os-val">${allDocs.length}</div><div class="os-label">ทั้งหมด</div></div>
@@ -2248,31 +2315,120 @@ async function renderQRViewer(docId){
 function renderProfile(){
   setPageTitle('ข้อมูลของฉัน','👤');
   const u=getCurrentUser();
+  const initials=(u.nickname||u.fullName||'?')[0].toUpperCase();
+  const locs=getLocations();
+  const locOpts=locs.map(l=>`<option value="${escapeHtml(l)}"${u.location===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
+  const deptOpts=getDepartments().map(d=>`<option value="${escapeHtml(d)}"${u.department===d?' selected':''}>${escapeHtml(d)}</option>`).join('');
   document.getElementById('page-body').innerHTML=`
-  <div class="doc-detail-card" style="max-width:500px;">
+  <div class="doc-detail-card" style="max-width:560px;">
     <div style="padding:20px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;">
-      <div style="width:52px;height:52px;border-radius:50%;background:var(--blue-lt);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:var(--blue);">${(u.fullName||'?')[0].toUpperCase()}</div>
-      <div><div style="font-size:17px;font-weight:700;">${escapeHtml(u.fullName)}</div><div style="color:var(--muted);font-size:13px;">@${escapeHtml(u.username)}</div><span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}">${getRoleName(u.role)}</span></div>
+      <div style="width:52px;height:52px;border-radius:50%;background:var(--blue-lt);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:var(--blue);">${initials}</div>
+      <div>
+        <div style="font-size:17px;font-weight:700;">${u.nickname?escapeHtml(u.nickname)+' <span style="font-size:13px;color:var(--muted);">('+escapeHtml(u.fullName)+')</span>':escapeHtml(u.fullName)}</div>
+        <div style="color:var(--muted);font-size:13px;">@${escapeHtml(u.username)}</div>
+        <span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}">${getRoleName(u.role)}</span>
+      </div>
     </div>
-    <div class="ddc-row"><span class="ddc-label">อีเมล</span><span>${escapeHtml(u.email)}</span></div>
-    <div class="ddc-row"><span class="ddc-label">แผนก</span><span>${escapeHtml(u.department)}</span></div>
-    <div class="ddc-row"><span class="ddc-label">สถานที่</span><span>${escapeHtml(u.location)}</span></div>
-    <div class="ddc-row"><span class="ddc-label">สมาชิกตั้งแต่</span><span>${formatDate(u.createdAt)}</span></div>
-    <div class="ddc-row" style="flex-wrap:wrap;gap:8px;">
-      <span class="ddc-label">🔑 Passkey</span>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <span id="profile-passkey-status">กำลังตรวจสอบ...</span>
-        <button class="btn-outline btn-sm" onclick="openPasskeySetupModal()">✏️ ตั้ง/เปลี่ยน Passkey</button>
+
+    <!-- Section: ข้อมูลส่วนตัว -->
+    <div style="padding:16px;border-bottom:1px solid var(--border);">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">✏️ ข้อมูลส่วนตัว</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group" style="margin:0;grid-column:1/-1"><label>ชื่อ-นามสกุล *</label><input id="prof-fullname" type="text" value="${escapeHtml(u.fullName)}" placeholder="ชื่อ นามสกุล"></div>
+        <div class="form-group" style="margin:0;grid-column:1/-1"><label>ชื่อเล่น</label><input id="prof-nickname" type="text" value="${escapeHtml(u.nickname||'')}" placeholder="ชื่อเล่น (ไม่บังคับ)"></div>
+        <div class="form-group" style="margin:0"><label>แผนก</label><select id="prof-dept" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${deptOpts}</select></div>
+        <div class="form-group" style="margin:0"><label>สถานที่</label><select id="prof-location" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${locOpts}</select></div>
+      </div>
+      <div style="margin-top:12px;display:flex;justify-content:flex-end;">
+        <button class="btn-primary btn-sm" onclick="saveProfileInfo()">💾 บันทึกข้อมูล</button>
+      </div>
+    </div>
+
+    <!-- Section: เปลี่ยนรหัสผ่าน -->
+    <div style="padding:16px;border-bottom:1px solid var(--border);">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">🔒 เปลี่ยนรหัสผ่าน</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group" style="margin:0;grid-column:1/-1"><label>ยืนยัน Passkey (6 หลัก)</label><input id="prof-pw-passkey" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:4px;text-align:center;"></div>
+        <div class="form-group" style="margin:0"><label>รหัสผ่านใหม่</label><div class="pw-wrap"><input id="prof-new-pw" type="password" placeholder="อย่างน้อย 6 ตัว"><button type="button" class="pw-toggle" onclick="togglePw('prof-new-pw',this)">👁</button></div></div>
+        <div class="form-group" style="margin:0"><label>ยืนยันรหัสผ่าน</label><div class="pw-wrap"><input id="prof-new-pw2" type="password" placeholder="••••••"><button type="button" class="pw-toggle" onclick="togglePw('prof-new-pw2',this)">👁</button></div></div>
+      </div>
+      <div style="margin-top:12px;display:flex;justify-content:flex-end;">
+        <button class="btn-primary btn-sm" onclick="saveProfilePassword()">🔒 เปลี่ยนรหัสผ่าน</button>
+      </div>
+    </div>
+
+    <!-- Section: เปลี่ยน Passkey -->
+    <div style="padding:16px;">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">🔑 Passkey</div>
+      <div id="profile-passkey-status" style="margin-bottom:12px;font-size:13px;color:var(--muted);">กำลังตรวจสอบ...</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group" style="margin:0;grid-column:1/-1"><label>Passkey เดิม (ถ้ามี)</label><input id="prof-old-passkey" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:4px;text-align:center;"></div>
+        <div class="form-group" style="margin:0"><label>Passkey ใหม่ (6 หลัก)</label><input id="prof-new-passkey" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:4px;text-align:center;"></div>
+        <div class="form-group" style="margin:0"><label>ยืนยัน Passkey ใหม่</label><input id="prof-new-passkey2" type="password" inputmode="numeric" maxlength="6" placeholder="••••••" style="letter-spacing:4px;text-align:center;"></div>
+      </div>
+      <div style="margin-top:12px;display:flex;justify-content:flex-end;">
+        <button class="btn-primary btn-sm" onclick="saveProfilePasskey()">🔑 บันทึก Passkey</button>
       </div>
     </div>
   </div>`;
-  // load passkey status
+
   apiCall('GET',`/api/users/${escapeHtml(u.username)}/passkey-status`).then(r=>{
     const el=document.getElementById('profile-passkey-status');
     if(el&&r) el.innerHTML=r.hasPasskey
-      ?'<span class="passkey-chip set">✅ ตั้งแล้ว</span>'
-      :'<span class="passkey-chip unset">❌ ยังไม่ได้ตั้ง</span>';
+      ?'<span class="passkey-chip set">✅ ตั้ง Passkey แล้ว</span>'
+      :'<span class="passkey-chip unset">❌ ยังไม่ได้ตั้ง Passkey — กรอกแค่ Passkey ใหม่ได้เลย</span>';
   });
+}
+
+async function saveProfileInfo(){
+  const fullName=(document.getElementById('prof-fullname')?.value||'').trim();
+  const nickname=(document.getElementById('prof-nickname')?.value||'').trim();
+  const department=(document.getElementById('prof-dept')?.value||'').trim();
+  const location=(document.getElementById('prof-location')?.value||'').trim();
+  if(!fullName){ showToast('กรุณากรอกชื่อ-นามสกุล','error'); return; }
+  const res=await apiCall('PUT','/api/users/me/profile',{fullName,nickname,department,location});
+  if(!res){ showToast('บันทึกไม่สำเร็จ','error'); return; }
+  // Update cache
+  const users=getUsers();
+  const idx=users.findIndex(u=>u.username===res.username);
+  if(idx>=0) users[idx]={...users[idx],...res};
+  else users.push(res);
+  localStorage.setItem(K.users,JSON.stringify(users));
+  store.setObj(K.session,{username:res.username,loginAt:Date.now()});
+  showToast('บันทึกข้อมูลเรียบร้อย ✅','success');
+  renderProfile();
+}
+
+async function saveProfilePassword(){
+  const passkey=(document.getElementById('prof-pw-passkey')?.value||'').trim();
+  const newPassword=(document.getElementById('prof-new-pw')?.value||'').trim();
+  const newPassword2=(document.getElementById('prof-new-pw2')?.value||'').trim();
+  if(!passkey||!/^\d{6}$/.test(passkey)){ showToast('กรุณากรอก Passkey 6 หลัก','error'); return; }
+  if(!newPassword||newPassword.length<6){ showToast('รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร','error'); return; }
+  if(newPassword!==newPassword2){ showToast('รหัสผ่านไม่ตรงกัน','error'); return; }
+  const res=await apiCall('PUT','/api/users/me/password',{passkey,newPassword});
+  if(!res){ showToast('เปลี่ยนรหัสผ่านไม่สำเร็จ','error'); return; }
+  showToast('เปลี่ยนรหัสผ่านเรียบร้อย ✅','success');
+  document.getElementById('prof-pw-passkey').value='';
+  document.getElementById('prof-new-pw').value='';
+  document.getElementById('prof-new-pw2').value='';
+}
+
+async function saveProfilePasskey(){
+  const oldPasskey=(document.getElementById('prof-old-passkey')?.value||'').trim();
+  const newPasskey=(document.getElementById('prof-new-passkey')?.value||'').trim();
+  const newPasskey2=(document.getElementById('prof-new-passkey2')?.value||'').trim();
+  if(!newPasskey||!/^\d{6}$/.test(newPasskey)){ showToast('Passkey ใหม่ต้องเป็นตัวเลข 6 หลัก','error'); return; }
+  if(newPasskey!==newPasskey2){ showToast('Passkey ใหม่ไม่ตรงกัน','error'); return; }
+  const body={newPasskey};
+  if(oldPasskey) body.oldPasskey=oldPasskey;
+  const res=await apiCall('PUT','/api/users/me/passkey',body);
+  if(!res){ showToast('บันทึก Passkey ไม่สำเร็จ','error'); return; }
+  showToast('บันทึก Passkey เรียบร้อย ✅','success');
+  document.getElementById('prof-old-passkey').value='';
+  document.getElementById('prof-new-passkey').value='';
+  document.getElementById('prof-new-passkey2').value='';
+  renderProfile();
 }
 
 // ===================================================================
@@ -2530,7 +2686,7 @@ function renderAdminTab(tab){
     </div>
     `;
   }
-  document.getElementById('page-body').innerHTML=`<div class="admin-tabs">${tabBar}</div>${content}`;
+  document.getElementById('page-body').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button id="page-refresh-btn" onclick="forceRefreshPage('admin')" style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;" ${canRefreshPage('admin')?'':'disabled'}>🔄 ${canRefreshPage('admin')?'รีเฟรช':'รออีก '+refreshCooldownSecs('admin')+' วิ'}</button></div><div class="admin-tabs">${tabBar}</div>${content}`;
   if(tab==='settings') setTimeout(checkEmailStatus, 100);
 }
 
@@ -2575,7 +2731,7 @@ function renderUserDetailPanel(username){
     <div class="udp-header">
       <div class="udp-avatar">${initials}</div>
       <div>
-        <div class="udp-name">${escapeHtml(u.fullName)}</div>
+        <div class="udp-name">${u.nickname?escapeHtml(u.nickname)+' <span style="font-size:13px;font-weight:400;color:var(--muted);">('+escapeHtml(u.fullName)+')</span>':escapeHtml(u.fullName)}</div>
         <div class="udp-sub">@${escapeHtml(u.username)} · สมัครเมื่อ ${formatDate(u.createdAt)}</div>
         <span class="badge ${hasAdminAccess(u)?'badge-admin':'badge-user'}" style="margin-top:5px;">${getRoleName(u.role)}</span>
         ${isSelf?'<span class="badge" style="margin-left:6px;margin-top:5px;background:rgba(16,185,129,0.1);color:var(--green);border:1px solid rgba(16,185,129,0.2);">ตัวเอง</span>':''}
@@ -2594,6 +2750,7 @@ function renderUserDetailPanel(username){
         <div class="udp-section-title">✏️ ข้อมูลส่วนตัว</div>
         <div class="udp-grid">
           <div class="form-group"><label>ชื่อ-นามสกุล</label><input id="edit-fullname" type="text" value="${escapeHtml(u.fullName)}"></div>
+          <div class="form-group"><label>ชื่อเล่น</label><input id="edit-nickname" type="text" value="${escapeHtml(u.nickname||'')}" placeholder="ชื่อเล่น (ไม่บังคับ)"></div>
           <div class="form-group"><label>Username</label><input id="edit-username" type="text" value="${escapeHtml(u.username)}"${isSelf?' disabled':''}></div>
           <div class="form-group" style="grid-column:1/-1"><label>อีเมล</label><input id="edit-email" type="email" value="${escapeHtml(u.email)}"></div>
         </div>
@@ -2618,8 +2775,10 @@ function renderUserDetailPanel(username){
         <div class="udp-section-title">🔑 Passkey</div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
           <div id="admin-passkey-status-${escapeHtml(u.username)}" style="font-size:13px;color:var(--muted);">กำลังตรวจสอบ...</div>
-          <div style="display:flex;gap:6px;">
-            ${isSelf?`<button class="btn-outline btn-sm" onclick="openPasskeySetupModal()">✏️ ตั้ง/เปลี่ยน Passkey</button>`:`<button class="btn-outline btn-sm" style="color:var(--red);border-color:var(--red);" onclick="adminClearPasskey('${escapeHtml(u.username)}')">🗑 ล้าง Passkey</button>`}
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${isSelf?`<button class="btn-outline btn-sm" onclick="openPasskeySetupModal()">✏️ ตั้ง/เปลี่ยน Passkey</button>`:`
+            <button class="btn-outline btn-sm" style="color:var(--red);border-color:var(--red);" onclick="adminClearPasskey('${escapeHtml(u.username)}')">🗑 ล้าง Passkey</button>
+            <button class="btn-outline btn-sm" onclick="adminSetPasskeyModal('${escapeHtml(u.username)}')">🔑 ตั้ง Passkey ใหม่</button>`}
           </div>
         </div>
       </div>
@@ -2636,6 +2795,7 @@ function renderUserDetailPanel(username){
 
 async function saveUserEdit(oldUsername){
   const fullName=document.getElementById('edit-fullname')?.value.trim();
+  const editNickname=(document.getElementById('edit-nickname')?.value||'').trim();
   const newUsername=(document.getElementById('edit-username')?.value||oldUsername).trim().toLowerCase();
   const email=document.getElementById('edit-email')?.value.trim();
   const department=document.getElementById('edit-dept')?.value.trim();
@@ -2675,7 +2835,7 @@ async function saveUserEdit(oldUsername){
   if(pw){
     users[idx].passwordHash=await hashPassword(pw);
   }
-  const res=await apiCall('PUT','/api/users/'+oldUsername,{fullName,email,department,location,role:role||users[idx].role,password:pw||undefined});
+  const res=await apiCall('PUT','/api/users/'+oldUsername,{fullName,nickname:editNickname,email,department,location,role:role||users[idx].role,password:pw||undefined});
   if(!res||res.error){showToast(res?.error||'บันทึกไม่สำเร็จ','error');return;}
   await syncFromServer();
   adminSelectedUser=newUsername!==oldUsername?newUsername:oldUsername;

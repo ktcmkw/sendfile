@@ -126,7 +126,7 @@ async function pushNotif(io, { type, toUsername, fromUsername, fromFullName, mes
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
 const fmtUser = u => ({
-  username: u.username, fullName: u.full_name, email: u.email,
+  username: u.username, fullName: u.full_name, nickname: u.nickname||'', email: u.email,
   department: u.department, location: u.location, role: u.role_id,
   passwordHash: u.password_hash, createdAt: Number(u.created_at)
 });
@@ -181,7 +181,7 @@ const fmtDocMeta = d => ({
 // ═══════════════════════════════════════════════════════════════════
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, fullName, email, department, location, password } = req.body;
+    const { username, fullName, nickname, email, department, location, password } = req.body;
     if (!username || !fullName || !password) return res.status(400).json({ error: 'กรอกข้อมูลไม่ครบ' });
     const dup = await query('SELECT 1 FROM users WHERE username=$1', [username]);
     if (dup.rows.length) return res.status(409).json({ error: 'ชื่อผู้ใช้นี้มีอยู่แล้ว' });
@@ -190,11 +190,11 @@ app.post('/api/auth/register', async (req, res) => {
     const { rows: allUsers } = await query('SELECT COUNT(*) FROM users');
     const role = Number(allUsers[0].count) === 0 ? 'admin' : 'user'; // first user = admin
     await query(
-      'INSERT INTO users (username,full_name,email,department,location,role_id,password_hash,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
-      [username, fullName, email||'', department||'', location||'', role, hash, now]
+      'INSERT INTO users (username,full_name,nickname,email,department,location,role_id,password_hash,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [username, fullName, nickname||'', email||'', department||'', location||'', role, hash, now]
     );
     await auditLog('register', username, null, { fullName, department }, req.ip);
-    const newUser = { username, fullName: fullName, email: email||'', department: department||'', location: location||'', role };
+    const newUser = { username, fullName: fullName, nickname: nickname||'', email: email||'', department: department||'', location: location||'', role };
     res.json({ token: tok(username), username, role, user: newUser });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -331,6 +331,88 @@ app.post('/api/auth/passkey-login', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── My Profile ─────────────────────────────────────────────────
+app.get('/api/users/me', auth, (req, res) => res.json(fmtUser(req.user)));
+
+app.put('/api/users/me/profile', auth, async (req, res) => {
+  try {
+    const { fullName, nickname, department, location } = req.body;
+    if (!fullName || !fullName.trim()) return res.status(400).json({ error: 'กรุณากรอกชื่อ-นามสกุล' });
+    await query(
+      'UPDATE users SET full_name=$1, nickname=$2, department=$3, location=$4 WHERE username=$5',
+      [fullName.trim(), nickname||'', department||'', location||'', req.user.username]
+    );
+    await auditLog('profile_update', req.user.username, null, { fullName, nickname }, req.ip);
+    const { rows } = await query('SELECT * FROM users WHERE username=$1', [req.user.username]);
+    res.json(fmtUser(rows[0]));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/users/me/password', auth, async (req, res) => {
+  try {
+    const { passkey, newPassword } = req.body;
+    if (!passkey || !/^\d{6}$/.test(passkey)) return res.status(400).json({ error: 'กรุณากรอก Passkey 6 หลัก' });
+    if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร' });
+    const { rows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.user.username]);
+    if (!rows[0]?.passkey_hash) return res.status(403).json({ error: 'ยังไม่ได้ตั้ง Passkey กรุณาตั้งก่อน' });
+    const ok = await bcrypt.compare(passkey, rows[0].passkey_hash);
+    if (!ok) return res.status(403).json({ error: 'Passkey ไม่ถูกต้อง' });
+    const hash = await bcrypt.hash(newPassword, 10);
+    await query('UPDATE users SET password_hash=$1 WHERE username=$2', [hash, req.user.username]);
+    await auditLog('password_change', req.user.username, null, {}, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/users/me/passkey', auth, async (req, res) => {
+  try {
+    const { oldPasskey, newPasskey } = req.body;
+    if (!newPasskey || !/^\d{6}$/.test(newPasskey)) return res.status(400).json({ error: 'Passkey ใหม่ต้องเป็นตัวเลข 6 หลัก' });
+    const { rows } = await query('SELECT passkey_hash FROM users WHERE username=$1', [req.user.username]);
+    // If user already has a passkey, verify old one first
+    if (rows[0]?.passkey_hash) {
+      if (!oldPasskey) return res.status(403).json({ error: 'กรุณากรอก Passkey เดิมก่อน' });
+      const ok = await bcrypt.compare(oldPasskey, rows[0].passkey_hash);
+      if (!ok) return res.status(403).json({ error: 'Passkey เดิมไม่ถูกต้อง' });
+    }
+    // Check duplicate passkey
+    const { rows: others } = await query('SELECT passkey_hash FROM users WHERE passkey_hash IS NOT NULL AND username!=$1', [req.user.username]);
+    for (const u of others) {
+      const dup = await bcrypt.compare(newPasskey, u.passkey_hash);
+      if (dup) return res.status(409).json({ error: 'Passkey นี้ถูกใช้งานแล้ว กรุณาใช้ตัวเลขอื่น' });
+    }
+    const hash = await bcrypt.hash(newPasskey, 10);
+    await query('UPDATE users SET passkey_hash=$1 WHERE username=$2', [hash, req.user.username]);
+    await auditLog('passkey_change', req.user.username, null, {}, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Admin: reset/set passkey for any user (no verification needed) ───────────────────────
+app.put('/api/users/:username/admin-reset-passkey', auth, admin, async (req, res) => {
+  try {
+    const { newPasskey } = req.body;
+    const target = req.params.username;
+    if (newPasskey && !/^\d{6}$/.test(newPasskey)) return res.status(400).json({ error: 'Passkey ต้องเป็นตัวเลข 6 หลัก' });
+    if (!newPasskey) {
+      // Clear passkey
+      await query('UPDATE users SET passkey_hash=NULL WHERE username=$1', [target]);
+      await auditLog('admin_passkey_clear', req.user.username, target, {}, req.ip);
+      await pushNotif(req.io, { type:'system', toUsername: target,
+        fromUsername: req.user.username, fromFullName: req.user.full_name || 'Admin',
+        message: 'Admin ได้ล้าง Passkey ของคุณแล้ว กรุณาตั้ง Passkey ใหม่' });
+      return res.json({ ok: true, action: 'cleared' });
+    }
+    const hash = await bcrypt.hash(newPasskey, 10);
+    await query('UPDATE users SET passkey_hash=$1 WHERE username=$2', [hash, target]);
+    await auditLog('admin_passkey_reset', req.user.username, target, {}, req.ip);
+    await pushNotif(req.io, { type:'system', toUsername: target,
+      fromUsername: req.user.username, fromFullName: req.user.full_name || 'Admin',
+      message: `Admin ได้เปลี่ยน Passkey ของคุณแล้ว กรุณาเข้าสู่ระบบใหม่` });
+    res.json({ ok: true, action: 'set' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // USERS
 // ═══════════════════════════════════════════════════════════════════
@@ -343,15 +425,15 @@ app.get('/api/users', auth, async (req, res) => {
 
 app.put('/api/users/:username', auth, admin, async (req, res) => {
   try {
-    const { fullName, email, department, location, role, password } = req.body;
+    const { fullName, nickname, email, department, location, role, password } = req.body;
     const uname = req.params.username;
     if (password?.length >= 4) {
       const hash = await bcrypt.hash(password, 10);
-      await query('UPDATE users SET full_name=$1,email=$2,department=$3,location=$4,role_id=$5,password_hash=$6 WHERE username=$7',
-        [fullName, email, department, location, role, hash, uname]);
+      await query('UPDATE users SET full_name=$1,nickname=$2,email=$3,department=$4,location=$5,role_id=$6,password_hash=$7 WHERE username=$8',
+        [fullName, nickname||'', email, department, location, role, hash, uname]);
     } else {
-      await query('UPDATE users SET full_name=$1,email=$2,department=$3,location=$4,role_id=$5 WHERE username=$6',
-        [fullName, email, department, location, role, uname]);
+      await query('UPDATE users SET full_name=$1,nickname=$2,email=$3,department=$4,location=$5,role_id=$6 WHERE username=$7',
+        [fullName, nickname||'', email, department, location, role, uname]);
     }
     await auditLog('user_edit', req.user.username, uname, { fullName, role }, req.ip);
     // Notify user if their password was changed by admin
