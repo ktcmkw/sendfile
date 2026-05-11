@@ -1183,68 +1183,11 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 /* ── Inbox card clickable active state ── */
 .inbox-card-clickable:active{transform:translateY(0) scale(0.99);}
 
-/* ── Modal header / body / footer helpers ── */
-.modal-header{
-  padding:18px 22px;border-bottom:1px solid var(--border);
-  font-weight:800;font-size:15px;
-  background:linear-gradient(135deg,var(--blue-lt) 0%,var(--white) 100%);}
-.modal-body{padding:20px 22px;}
-.modal-footer{
-  padding:14px 22px;border-top:1px solid var(--border);
-  display:flex;justify-content:flex-end;gap:8px;
-  background:var(--bg);}
-
-/* ── Modal entrance animation ── */
-@keyframes modal-in{
-  from{opacity:0;transform:scale(.94) translateY(8px);}
-  to{opacity:1;transform:scale(1) translateY(0);}}
-
-/* ── Toast class (complements existing #toast ID) ── */
-.toast{
-  position:fixed;bottom:24px;right:24px;z-index:9999;
-  background:var(--text);color:#fff;
-  padding:12px 18px;border-radius:var(--r-lg);
-  font-size:13px;font-weight:600;
-  box-shadow:var(--shadow-lg);
-  animation:toast-in .22s cubic-bezier(.34,1.56,.64,1);}
-.toast.success{background:var(--green);}
-.toast.error{background:var(--red);}
-.toast.info{background:var(--blue);}
-@keyframes toast-in{
-  from{opacity:0;transform:translateY(10px) scale(.95);}
-  to{opacity:1;transform:translateY(0) scale(1);}}
-
-/* ── Sidebar nav item polish ── */
-.sidebar-nav-item{
-  transition:background var(--transition),color var(--transition),transform var(--transition);}
-.sidebar-nav-item:hover{transform:translateX(2px);}
-.sidebar-nav-item.active{
-  background:rgba(99,102,241,0.14);
-  color:#fff;font-weight:700;
-  box-shadow:inset 3px 0 0 var(--blue);}
-
-/* ── Page body base rule ── */
-#page-body{
-  padding:20px 24px;
-  max-width:1200px;margin:0 auto;}
-@media(max-width:768px){
-  #page-body{padding:14px 16px;}
-}
-
 /* ═══════════════════════════════════════════════
-   MOBILE POLISH (max-width: 600px) — toolbar + modal + toast
+   MOBILE POLISH (max-width: 600px)
 ═══════════════════════════════════════════════ */
 @media(max-width:600px){
   .page-toolbar{margin-bottom:10px;}
   .page-toolbar-label{font-size:12px;}
   .refresh-pill-btn{font-size:11px;padding:5px 11px;}
-
-  .toast{bottom:80px;right:16px;left:16px;text-align:center;}
-
-  .modal-overlay{align-items:flex-end;padding:0;}
-  .modal-box{border-bottom-left-radius:0;border-bottom-right-radius:0;
-    animation:modal-slide-up .22s cubic-bezier(.34,1.2,.64,1);}
-  @keyframes modal-slide-up{
-    from{transform:translateY(100%);}
-    to{transform:translateY(0);}}
 }

@@ -166,8 +166,40 @@ let _pollInterval = null;
 let _lastSyncTime = 0;
 const _refreshCooldowns = {}; // keyed by page name, value = last refresh timestamp
 function canRefreshPage(page){ return Date.now() - (_refreshCooldowns[page]||0) > 30000; }
-function markRefreshed(page){ _refreshCooldowns[page]=Date.now(); }
+function markRefreshed(page){ _refreshCooldowns[page]=Date.now(); startRefreshCountdown(page); }
 function refreshCooldownSecs(page){ return Math.max(0,30-Math.round((Date.now()-(_refreshCooldowns[page]||0))/1000)); }
+
+// ── Live countdown on refresh buttons ──────────────────────────────
+let _countdownInterval = null;
+function startRefreshCountdown(page){
+  if(_countdownInterval) clearInterval(_countdownInterval);
+  _countdownInterval = setInterval(()=>{
+    const secs = refreshCooldownSecs(page);
+    const btn = document.getElementById('page-refresh-btn') ||
+                document.getElementById('inbox-refresh-btn') ||
+                document.getElementById('notifs-refresh-btn');
+    if(!btn){ clearInterval(_countdownInterval); return; }
+    if(secs <= 0){
+      clearInterval(_countdownInterval);
+      btn.disabled = false;
+      // restore icon+text
+      const svgPart = btn.querySelector('svg') ? '' : '';
+      btn.innerHTML = btn.innerHTML.replace(/รออีก\s*\d+\s*วิ|รีเฟรช/,'รีเฟรช');
+      btn.disabled = false;
+      return;
+    }
+    // update countdown text — find text node and replace
+    const walker = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT);
+    while(walker.nextNode()){
+      const n = walker.currentNode;
+      if(/รออีก|วิ|รีเฟรช/.test(n.textContent)){
+        n.textContent = 'รออีก '+secs+' วิ';
+        break;
+      }
+    }
+    btn.disabled = true;
+  }, 1000);
+}
 async function forceRefreshPage(page){
   if(!canRefreshPage(page)){ showToast('กรุณารอ '+refreshCooldownSecs(page)+' วินาที ก่อนรีเฟรชอีกครั้ง','error'); return; }
   markRefreshed(page);
