@@ -24,6 +24,40 @@ const BASE_URL = (()=>{
 const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
 const REMEMBER_KEY = 'sf_doc_session';     // 24h remembered doc-preview session
 const REMEMBER_AUTH_KEY = 'sf_remember_auth'; // 24h remember-me for regular login
+const THEME_KEY = 'sf_color_theme'; // color accent theme
+
+const COLOR_THEMES = {
+  red:     { blue:'#dc2626', blueDk:'#b91c1c', blueLt:'rgba(220,38,38,0.08)',  glow:'rgba(220,38,38,0.15)' },
+  blue:    { blue:'#2563eb', blueDk:'#1d4ed8', blueLt:'rgba(37,99,235,0.08)',  glow:'rgba(37,99,235,0.15)' },
+  purple:  { blue:'#7c3aed', blueDk:'#6d28d9', blueLt:'rgba(124,58,237,0.08)',glow:'rgba(124,58,237,0.15)' },
+  green:   { blue:'#059669', blueDk:'#047857', blueLt:'rgba(5,150,105,0.08)',  glow:'rgba(5,150,105,0.15)' },
+  rainbow: { blue:'#e11d48', blueDk:'#be123c', blueLt:'rgba(225,29,72,0.08)', glow:'rgba(225,29,72,0.15)', rainbow:true },
+};
+
+function applyColorTheme(theme){
+  const t = COLOR_THEMES[theme] || COLOR_THEMES.red;
+  const r = document.documentElement;
+  r.style.setProperty('--blue',    t.blue);
+  r.style.setProperty('--blue-dk', t.blueDk);
+  r.style.setProperty('--blue-lt', t.blueLt);
+  r.style.setProperty('--indigo-glow', t.glow);
+  if(t.rainbow){
+    document.documentElement.classList.add('theme-rainbow');
+  } else {
+    document.documentElement.classList.remove('theme-rainbow');
+  }
+  localStorage.setItem(THEME_KEY, theme);
+  // Update swatch borders to highlight active
+  Object.keys(COLOR_THEMES).forEach(k=>{
+    const sw=document.getElementById('tswatch-'+k);
+    if(sw) sw.style.borderColor = (k===theme)?'white':'transparent';
+  });
+}
+
+function initColorTheme(){
+  const saved = localStorage.getItem(THEME_KEY) || 'red';
+  applyColorTheme(saved);
+}
 
 // ── 24h Doc-preview session helpers ─────────────────────────────
 function saveDocSession(token, username) {
@@ -74,7 +108,7 @@ function clearRememberAuth() {
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
 // stale K.* localStorage keys so mobile browsers don't show old data
-const APP_VERSION = 'v8-20260511c'; // bump → clears stale hardcoded locations/depts
+const APP_VERSION = 'v8-20260511d'; // bump → clears stale hardcoded locations/depts
 (function clearCacheOnVersionChange() {
   const stored = localStorage.getItem('sf_app_version');
   if (stored !== APP_VERSION) {
@@ -2760,33 +2794,61 @@ async function runDbSync(){
   const btn=document.getElementById('db-sync-btn');
   const logEl=document.getElementById('db-sync-log');
   if(!btn||!logEl) return;
-  btn.disabled=true; btn.textContent='⏳ กำลังดึงข้อมูล...';
+  // Clear and reset on every click
+  btn.disabled=true; btn.innerHTML='⏳ กำลังดึงข้อมูล...';
   logEl.style.display='block';
-  logEl.innerHTML='<span style="color:var(--muted);">เริ่มต้น...</span><br>';
+  const items=[
+    {key:'users',    label:'👥 สมาชิก'},
+    {key:'docs',     label:'📄 เอกสาร'},
+    {key:'notifs',   label:'🔔 การแจ้งเตือน'},
+    {key:'roles',    label:'🎭 บทบาท'},
+    {key:'depts',    label:'🏢 แผนก'},
+    {key:'locs',     label:'📍 สถานที่จัดเก็บ'},
+  ];
+  // Render skeleton rows
+  logEl.innerHTML=items.map(it=>`
+    <div id="dsync-${it.key}" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:16px;">${it.label.split(' ')[0]}</span>
+      <span style="flex:1;font-size:13px;">${it.label.slice(it.label.indexOf(' ')+1)}</span>
+      <span id="dsync-val-${it.key}" style="font-family:monospace;font-size:12px;color:var(--muted);">⏳ โหลด...</span>
+    </div>`).join('')+
+    `<div id="dsync-total" style="padding-top:8px;font-size:12px;color:var(--muted);"></div>`;
   const t0=Date.now();
-  const appendLog=(msg,ok=true)=>{
-    const color=ok?'var(--green)':'var(--red)';
-    const ms=Date.now()-t0;
-    logEl.innerHTML+=`<span style="color:${color};">[${ms}ms] ${escapeHtml(msg)}</span><br>`;
-    logEl.scrollTop=logEl.scrollHeight;
+  const setVal=(key,val,ok=true)=>{
+    const el=document.getElementById('dsync-val-'+key);
+    if(el){ el.textContent=val; el.style.color=ok?'var(--green)':'var(--red)'; }
   };
   try {
-    appendLog('เชื่อมต่อ server...');
     const res=await apiCall('GET','/api/admin/db-status');
-    if(!res){ appendLog('ไม่สามารถเชื่อมต่อ server ได้','error',false); return; }
-    (res.log||[]).forEach(l=>appendLog(l.msg, l.ok));
-    if(res.ok){
-      appendLog(`✅ Force sync สำเร็จ รวม ${res.totalMs}ms`);
-      await syncFromServer();
-      appendLog('Client sync เสร็จแล้ว — หน้าจอจะอัปเดตทันที');
-      showToast('ดึงข้อมูลจาก Neon DB สำเร็จ ✓','success');
-    } else {
-      appendLog('❌ เกิดข้อผิดพลาด: '+(res.error||'unknown'), false);
+    if(!res||!res.ok){
+      items.forEach(it=>setVal(it.key,'❌ ผิดพลาด',false));
+      document.getElementById('dsync-total').textContent='เกิดข้อผิดพลาด: '+(res?.error||'unknown');
+      return;
     }
+    // Parse log entries from server (format: "Users: N รายการ" etc.)
+    const logMap={};
+    (res.log||[]).forEach(l=>{
+      if(l.msg.startsWith('Users:'))       logMap.users=l.msg;
+      if(l.msg.startsWith('Documents:'))   logMap.docs=l.msg;
+      if(l.msg.startsWith('Notification')) logMap.notifs=l.msg;
+      if(l.msg.startsWith('Roles:'))       logMap.roles=l.msg;
+      if(l.msg.startsWith('Departments:')) logMap.depts=l.msg;
+      if(l.msg.startsWith('Locations:'))   logMap.locs=l.msg;
+    });
+    items.forEach(it=>{
+      const entry=logMap[it.key];
+      if(entry){ const n=entry.match(/(\d+)/); setVal(it.key,(n?'✅ '+n[1]+' รายการ':'✅ โหลดแล้ว')); }
+      else setVal(it.key,'✅ โหลดแล้ว');
+    });
+    document.getElementById('dsync-total').innerHTML=
+      `<span style="color:var(--green);font-weight:600;">✅ Force sync สำเร็จ</span> — ใช้เวลา ${res.totalMs}ms · ส่ง socket force_sync แล้ว`;
+    await syncFromServer();
+    showToast('ดึงข้อมูลจาก Neon DB สำเร็จ ✓','success');
   } catch(e){
-    appendLog('❌ Error: '+e.message, false);
+    items.forEach(it=>setVal(it.key,'❌',false));
+    document.getElementById('dsync-total').textContent='Error: '+e.message;
   } finally {
-    btn.disabled=false; btn.textContent='🔄 ดึงข้อมูลจาก Neon DB ทันที';
+    btn.disabled=false; btn.innerHTML='🔄 ดึงข้อมูลจาก Neon DB ทันที';
   }
 }
 
@@ -3707,6 +3769,7 @@ async function restoreSession(token, username, afterEnter) {
 }
 
 (function initApp() {
+  initColorTheme();
   const params = new URLSearchParams(window.location.search);
   const docIdParam = params.get('doc');
 

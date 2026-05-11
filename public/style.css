@@ -472,6 +472,29 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 [data-theme="dark"] #db-sync-log{background:#0d0d18;border-color:#2a2a3e;color:#a0ffa0;}
 [data-theme="dark"] .form-group label{color:#b0b0cc;}
 [data-theme="dark"] .stat-label{color:#a0a0c0;}
+
+/* ── Rainbow theme animation ───────────────────────────────────── */
+@keyframes rainbowHue{
+  0%   { --blue:#e11d48; --blue-dk:#be123c; }
+  16%  { --blue:#ea580c; --blue-dk:#c2410c; }
+  33%  { --blue:#ca8a04; --blue-dk:#a16207; }
+  50%  { --blue:#16a34a; --blue-dk:#15803d; }
+  66%  { --blue:#2563eb; --blue-dk:#1d4ed8; }
+  83%  { --blue:#7c3aed; --blue-dk:#6d28d9; }
+  100% { --blue:#e11d48; --blue-dk:#be123c; }
+}
+.theme-rainbow {
+  animation: rainbowHue 6s linear infinite;
+}
+.theme-rainbow .sb-avatar,
+.theme-rainbow .btn-primary,
+.theme-rainbow .nav-item.active {
+  animation: rainbowHue 6s linear infinite;
+}
+
+/* ── Theme swatch active ring ──────────────────────────────────── */
+[id^="tswatch-"]{transition:border-color .2s,transform .15s;}
+[id^="tswatch-"]:hover{transform:scale(1.2);}
 [data-theme="dark"] .table-body{background:#111118;}
 [data-theme="dark"] .sb-section{border-color:#1e1e2e;}
 [data-theme="dark"] .stat-card.c-blue::before{background:linear-gradient(90deg,#ef4444,#f87171);}
