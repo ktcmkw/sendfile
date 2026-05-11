@@ -773,6 +773,38 @@ app.get('/api/sync', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Admin: Force DB sync — returns real-time log from Neon DB ───────────────
+app.get('/api/admin/db-status', auth, admin, async (req, res) => {
+  const t0 = Date.now();
+  const log = [];
+  const step = (msg, ok=true) => log.push({ msg, ok, ms: Date.now()-t0 });
+  try {
+    step('เชื่อมต่อ Neon PostgreSQL...');
+    const [usersR, docsR, notifsR, rolesR, deptsR, locsR] = await Promise.all([
+      query('SELECT COUNT(*) as n FROM users'),
+      query('SELECT COUNT(*) as n FROM documents'),
+      query('SELECT COUNT(*) as n FROM notifications'),
+      query('SELECT COUNT(*) as n FROM roles'),
+      query('SELECT COUNT(*) as n FROM departments'),
+      query('SELECT COUNT(*) as n FROM locations')
+    ]);
+    step(`Users: ${usersR.rows[0].n} รายการ`);
+    step(`Documents: ${docsR.rows[0].n} รายการ`);
+    step(`Notifications: ${notifsR.rows[0].n} รายการ`);
+    step(`Roles: ${rolesR.rows[0].n} รายการ`);
+    step(`Departments: ${deptsR.rows[0].n} รายการ`);
+    step(`Locations: ${locsR.rows[0].n} รายการ`);
+    step(`ดึงข้อมูลสำเร็จทั้งหมด — ใช้เวลา ${Date.now()-t0}ms`);
+    // Emit force_sync so all clients refresh
+    req.io.emit('force_sync');
+    step('ส่งสัญญาณ force_sync ไปยังทุก client แล้ว');
+    res.json({ ok: true, log, totalMs: Date.now()-t0 });
+  } catch(e) {
+    step('ERROR: '+e.message, false);
+    res.status(500).json({ ok: false, log, error: e.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // ROLES
 // ═══════════════════════════════════════════════════════════════════
@@ -881,6 +913,20 @@ app.post('/api/notifs/broadcast', auth, admin, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // DEPARTMENTS
 // ═══════════════════════════════════════════════════════════════════
+// ─── Public endpoints (no auth) — safe to expose: just dept/location names ───
+app.get('/api/public/departments', async (req, res) => {
+  try {
+    const { rows } = await query('SELECT name FROM departments ORDER BY id ASC');
+    res.json(rows.map(r => r.name));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/public/locations', async (req, res) => {
+  try {
+    const { rows } = await query('SELECT name FROM locations ORDER BY id ASC');
+    res.json(rows.map(r => r.name));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/departments', auth, async (req, res) => {
   try {
     const { rows } = await query('SELECT name FROM departments ORDER BY id ASC');

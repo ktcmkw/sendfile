@@ -74,7 +74,7 @@ function clearRememberAuth() {
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
 // stale K.* localStorage keys so mobile browsers don't show old data
-const APP_VERSION = 'v8-20260511b'; // bump → clears stale hardcoded locations/depts
+const APP_VERSION = 'v8-20260511c'; // bump → clears stale hardcoded locations/depts
 (function clearCacheOnVersionChange() {
   const stored = localStorage.getItem('sf_app_version');
   if (stored !== APP_VERSION) {
@@ -525,10 +525,14 @@ async function ensureUsersLoaded(onDone) {
 async function ensureLocsLoaded() {
   if (getLocations().length > 0 && getDepartments().length > 0) return;
   try {
-    const [l, d] = await Promise.all([
-      apiCall('GET', '/api/locations'),
-      apiCall('GET', '/api/departments')
-    ]);
+    // Use public endpoints when no JWT (e.g. register form before login)
+    const usePublic = !_jwt;
+    const locPath  = usePublic ? '/api/public/locations'    : '/api/locations';
+    const deptPath = usePublic ? '/api/public/departments'  : '/api/departments';
+    const fetchRaw = (path) => fetch(path).then(r=>r.json()).catch(()=>null);
+    const [l, d] = usePublic
+      ? await Promise.all([fetchRaw(locPath), fetchRaw(deptPath)])
+      : await Promise.all([apiCall('GET', locPath), apiCall('GET', deptPath)]);
     if (Array.isArray(l) && l.length) localStorage.setItem(K.locs, JSON.stringify(l));
     if (Array.isArray(d) && d.length) localStorage.setItem(K.depts, JSON.stringify(d));
   } catch(_) {}
@@ -1416,23 +1420,23 @@ function switchTab(tab){
     loginForm.style.display='none';
     regForm.style.display='block';
     // Populate department dropdown from cache
-    const deptSel=document.getElementById('r-dept');
-    if(deptSel){
-      const depts=getDepartments();
-      const cur=deptSel.value;
-      deptSel.innerHTML=`<option value="">-- เลือกแผนก --</option>`+
-        depts.map(d=>`<option value="${escapeHtml(d)}"${cur===d?' selected':''}>${escapeHtml(d)}</option>`).join('');
-    }
-    // Populate location dropdown — fetch from API if cache empty
-    const locSel=document.getElementById('r-location');
-    if(locSel){
-      ensureLocsLoaded().then(()=>{
+    // Load dept + location from public API (no JWT needed on register screen)
+    ensureLocsLoaded().then(()=>{
+      const deptSel=document.getElementById('r-dept');
+      if(deptSel){
+        const depts=getDepartments();
+        const cur=deptSel.value;
+        deptSel.innerHTML=`<option value="">-- เลือกแผนก --</option>`+
+          depts.map(d=>`<option value="${escapeHtml(d)}"${cur===d?' selected':''}>${escapeHtml(d)}</option>`).join('');
+      }
+      const locSel=document.getElementById('r-location');
+      if(locSel){
         const locs=getLocations();
         const curL=locSel.value;
         locSel.innerHTML=`<option value="">-- เลือกสถานที่ --</option>`+
           locs.map(l=>`<option value="${escapeHtml(l)}"${curL===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
-      });
-    }
+      }
+    });
   }
   document.getElementById('tab-login').className='tab-btn'+(tab==='login'?' active':'');
   document.getElementById('tab-register').className='tab-btn'+(tab==='register'?' active':'');
@@ -2485,8 +2489,8 @@ function renderAdmin(){
 }
 function renderAdminTab(tab){
   adminTab=tab;
-  const tabs=['members','docs','roles','storage','settings'];
-  const labels=['สมาชิก','เอกสาร','บทบาท','แผนก/จัดเก็บ','ตั้งค่า'];
+  const tabs=['members','docs','roles','storage','settings','dbsync'];
+  const labels=['สมาชิก','เอกสาร','บทบาท','แผนก/จัดเก็บ','ตั้งค่า','🔄 DB Sync'];
   const tabBar=tabs.map((t,i)=>`<div class="admin-tab${t===tab?' active':''}" onclick="renderAdminTab('${t}')">${labels[i]}</div>`).join('');
   let content='';
   if(tab==='members'){
@@ -2729,8 +2733,61 @@ function renderAdminTab(tab){
     </div>
     `;
   }
+  if(tab==='dbsync'){
+    content=`<div class="card-section">
+      <div class="card-section-header" style="display:flex;align-items:center;gap:10px;">
+        🗄️ ดึงข้อมูลจาก Neon DB (Force Sync)
+      </div>
+      <div class="card-section-body">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.7;">
+          ใช้เมื่อข้อมูลบนหน้าเว็บไม่อัปเดต หรือต้องการดึงข้อมูลใหม่จาก PostgreSQL โดยตรง<br>
+          <span style="color:var(--red);font-size:12px;">⚠️ ระบบจะส่งสัญญาณ force_sync ไปยังทุก client ที่เปิดอยู่</span>
+        </div>
+        <button class="btn-primary" id="db-sync-btn" onclick="runDbSync()" style="min-width:180px;">
+          🔄 ดึงข้อมูลจาก Neon DB ทันที
+        </button>
+        <div id="db-sync-log" style="margin-top:16px;font-family:monospace;font-size:12px;background:var(--white);border:1px solid var(--border);border-radius:10px;padding:14px;min-height:80px;max-height:320px;overflow-y:auto;display:none;">
+        </div>
+      </div>
+    </div>`;
+  }
   document.getElementById('page-body').innerHTML=`<div class="page-toolbar" style="margin-bottom:8px;"><span class="page-toolbar-label">Admin Panel</span><button id="page-refresh-btn" onclick="forceRefreshPage('admin')" class="refresh-pill-btn" ${canRefreshPage('admin')?'':'disabled'}><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>${canRefreshPage('admin')?'รีเฟรช':'รออีก '+refreshCooldownSecs('admin')+' วิ'}</button></div><div class="admin-tabs">${tabBar}</div>${content}`;
   if(tab==='settings') setTimeout(checkEmailStatus, 100);
+}
+
+// ── Admin: Force DB Sync ────────────────────────────────────────────────────
+async function runDbSync(){
+  const btn=document.getElementById('db-sync-btn');
+  const logEl=document.getElementById('db-sync-log');
+  if(!btn||!logEl) return;
+  btn.disabled=true; btn.textContent='⏳ กำลังดึงข้อมูล...';
+  logEl.style.display='block';
+  logEl.innerHTML='<span style="color:var(--muted);">เริ่มต้น...</span><br>';
+  const t0=Date.now();
+  const appendLog=(msg,ok=true)=>{
+    const color=ok?'var(--green)':'var(--red)';
+    const ms=Date.now()-t0;
+    logEl.innerHTML+=`<span style="color:${color};">[${ms}ms] ${escapeHtml(msg)}</span><br>`;
+    logEl.scrollTop=logEl.scrollHeight;
+  };
+  try {
+    appendLog('เชื่อมต่อ server...');
+    const res=await apiCall('GET','/api/admin/db-status');
+    if(!res){ appendLog('ไม่สามารถเชื่อมต่อ server ได้','error',false); return; }
+    (res.log||[]).forEach(l=>appendLog(l.msg, l.ok));
+    if(res.ok){
+      appendLog(`✅ Force sync สำเร็จ รวม ${res.totalMs}ms`);
+      await syncFromServer();
+      appendLog('Client sync เสร็จแล้ว — หน้าจอจะอัปเดตทันที');
+      showToast('ดึงข้อมูลจาก Neon DB สำเร็จ ✓','success');
+    } else {
+      appendLog('❌ เกิดข้อผิดพลาด: '+(res.error||'unknown'), false);
+    }
+  } catch(e){
+    appendLog('❌ Error: '+e.message, false);
+  } finally {
+    btn.disabled=false; btn.textContent='🔄 ดึงข้อมูลจาก Neon DB ทันที';
+  }
 }
 
 // ── Admin: User selection & detail panel ──────────────────────────────────
