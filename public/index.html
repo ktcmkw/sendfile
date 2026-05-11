@@ -127,14 +127,23 @@
   </nav>
   <div class="sb-footer">
     <button class="theme-btn" id="theme-toggle-btn" onclick="toggleTheme()">🌙 Dark Mode</button>
-    <div style="padding:8px 12px 4px;">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">เฉดสี</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button onclick="applyColorTheme('red')"    title="แดง"      id="tswatch-red"     style="width:22px;height:22px;border-radius:50%;background:#dc2626;border:2px solid transparent;cursor:pointer;"></button>
-        <button onclick="applyColorTheme('blue')"   title="น้ำเงิน"  id="tswatch-blue"    style="width:22px;height:22px;border-radius:50%;background:#2563eb;border:2px solid transparent;cursor:pointer;"></button>
-        <button onclick="applyColorTheme('purple')" title="ม่วง"     id="tswatch-purple"  style="width:22px;height:22px;border-radius:50%;background:#7c3aed;border:2px solid transparent;cursor:pointer;"></button>
-        <button onclick="applyColorTheme('green')"  title="เขียว"    id="tswatch-green"   style="width:22px;height:22px;border-radius:50%;background:#059669;border:2px solid transparent;cursor:pointer;"></button>
-        <button onclick="applyColorTheme('rainbow')" title="Rainbow" id="tswatch-rainbow" style="width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#e11d48,#f59e0b,#10b981,#3b82f6,#7c3aed);border:2px solid transparent;cursor:pointer;"></button>
+    <div style="padding:6px 14px 8px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.08);"></div>
+        <span style="font-size:9px;color:rgba(255,255,255,0.35);letter-spacing:1px;text-transform:uppercase;">เฉดสี</span>
+        <div style="flex:1;height:1px;background:rgba(255,255,255,0.08);"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">
+        <button onclick="applyColorTheme('red')"    title="แดง"     id="tswatch-red"
+          style="flex:1;height:28px;border-radius:8px;background:#dc2626;border:2px solid transparent;cursor:pointer;"></button>
+        <button onclick="applyColorTheme('blue')"   title="น้ำเงิน" id="tswatch-blue"
+          style="flex:1;height:28px;border-radius:8px;background:#2563eb;border:2px solid transparent;cursor:pointer;"></button>
+        <button onclick="applyColorTheme('purple')" title="ม่วง"    id="tswatch-purple"
+          style="flex:1;height:28px;border-radius:8px;background:#7c3aed;border:2px solid transparent;cursor:pointer;"></button>
+        <button onclick="applyColorTheme('green')"  title="เขียว"   id="tswatch-green"
+          style="flex:1;height:28px;border-radius:8px;background:#059669;border:2px solid transparent;cursor:pointer;"></button>
+        <button onclick="applyColorTheme('rainbow')" title="Rainbow" id="tswatch-rainbow"
+          style="flex:1;height:28px;border-radius:8px;background:linear-gradient(135deg,#e11d48,#f59e0b,#10b981,#3b82f6,#7c3aed);border:2px solid transparent;cursor:pointer;"></button>
       </div>
     </div>
     <div class="logout-btn" onclick="handleLogout()">

@@ -47,10 +47,14 @@ function applyColorTheme(theme){
     document.documentElement.classList.remove('theme-rainbow');
   }
   localStorage.setItem(THEME_KEY, theme);
-  // Update swatch borders to highlight active
+  // Highlight active swatch with inset ring
   Object.keys(COLOR_THEMES).forEach(k=>{
     const sw=document.getElementById('tswatch-'+k);
-    if(sw) sw.style.borderColor = (k===theme)?'white':'transparent';
+    if(sw){
+      sw.style.borderColor = (k===theme)?'rgba(255,255,255,0.9)':'transparent';
+      sw.style.boxShadow   = (k===theme)?'0 0 0 2px rgba(255,255,255,0.3) inset':'none';
+      sw.style.transform   = (k===theme)?'scaleY(1.08)':'';
+    }
   });
 }
 
@@ -2768,20 +2772,28 @@ function renderAdminTab(tab){
     `;
   }
   if(tab==='dbsync'){
-    content=`<div class="card-section">
-      <div class="card-section-header" style="display:flex;align-items:center;gap:10px;">
-        🗄️ ดึงข้อมูลจาก Neon DB (Force Sync)
+    content=`<div style="max-width:680px;margin:0 auto;padding:4px 0;">
+      <div style="background:linear-gradient(135deg,var(--blue,#3b82f6) 0%,var(--blue-dk,#1d4ed8) 100%);border-radius:16px;padding:24px 28px;margin-bottom:20px;color:#fff;position:relative;overflow:hidden;">
+        <div style="position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.08);"></div>
+        <div style="position:absolute;right:20px;top:50%;transform:translateY(-50%);font-size:48px;opacity:0.25;">🗄️</div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;opacity:0.75;text-transform:uppercase;margin-bottom:6px;">Neon PostgreSQL</div>
+        <div style="font-size:20px;font-weight:800;margin-bottom:4px;">ดึงข้อมูลจาก Neon DB</div>
+        <div style="font-size:13px;opacity:0.8;">Force Sync — ดึงข้อมูลล่าสุดจาก PostgreSQL และส่ง socket ไปทุก client</div>
       </div>
-      <div class="card-section-body">
-        <div style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.7;">
-          ใช้เมื่อข้อมูลบนหน้าเว็บไม่อัปเดต หรือต้องการดึงข้อมูลใหม่จาก PostgreSQL โดยตรง<br>
-          <span style="color:var(--red);font-size:12px;">⚠️ ระบบจะส่งสัญญาณ force_sync ไปยังทุก client ที่เปิดอยู่</span>
+      <div style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:10px;padding:10px 16px;margin-bottom:20px;display:flex;align-items:center;gap:10px;font-size:13px;color:#92400e;">
+        <span style="font-size:16px;">⚠️</span>
+        <span>ระบบจะส่งสัญญาณ <code style="background:rgba(0,0,0,0.06);padding:1px 6px;border-radius:4px;">force_sync</code> ไปยังทุก client ที่เปิดอยู่</span>
+      </div>
+      <button class="btn-primary" id="db-sync-btn" onclick="runDbSync()" style="width:100%;padding:14px;font-size:15px;font-weight:700;border-radius:12px;margin-bottom:20px;letter-spacing:0.3px;">
+        🔄 ดึงข้อมูลจาก Neon DB ทันที
+      </button>
+      <div id="db-sync-log" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-sm);">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+          <span style="font-size:13px;font-weight:700;color:var(--text);">📊 ผลการดึงข้อมูล</span>
+          <span id="dsync-time-badge" style="margin-left:auto;font-size:11px;padding:3px 10px;border-radius:20px;background:var(--blue-lt,rgba(59,130,246,0.1));color:var(--blue,#3b82f6);font-weight:600;"></span>
         </div>
-        <button class="btn-primary" id="db-sync-btn" onclick="runDbSync()" style="min-width:180px;">
-          🔄 ดึงข้อมูลจาก Neon DB ทันที
-        </button>
-        <div id="db-sync-log" style="margin-top:16px;font-family:monospace;font-size:12px;background:var(--white);border:1px solid var(--border);border-radius:10px;padding:14px;min-height:80px;max-height:320px;overflow-y:auto;display:none;">
-        </div>
+        <div id="dsync-rows" style="padding:8px 0;"></div>
+        <div id="dsync-total" style="padding:12px 18px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);"></div>
       </div>
     </div>`;
   }
@@ -2806,17 +2818,23 @@ async function runDbSync(){
     {key:'locs',     label:'📍 สถานที่จัดเก็บ'},
   ];
   // Render skeleton rows
-  logEl.innerHTML=items.map(it=>`
-    <div id="dsync-${it.key}" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);">
-      <span style="font-size:16px;">${it.label.split(' ')[0]}</span>
-      <span style="flex:1;font-size:13px;">${it.label.slice(it.label.indexOf(' ')+1)}</span>
-      <span id="dsync-val-${it.key}" style="font-family:monospace;font-size:12px;color:var(--muted);">⏳ โหลด...</span>
-    </div>`).join('')+
-    `<div id="dsync-total" style="padding-top:8px;font-size:12px;color:var(--muted);"></div>`;
+  const rowsEl=document.getElementById('dsync-rows');
+  const timeBadge=document.getElementById('dsync-time-badge');
+  if(timeBadge) timeBadge.textContent='⏳ กำลังโหลด...';
+  if(rowsEl) rowsEl.innerHTML=items.map(it=>`
+    <div style="display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);">
+      <span style="font-size:18px;width:24px;text-align:center;">${it.label.split(' ')[0]}</span>
+      <span style="flex:1;font-size:13px;font-weight:500;color:var(--text);">${it.label.slice(it.label.indexOf(' ')+1)}</span>
+      <span id="dsync-val-${it.key}" style="font-family:monospace;font-size:12px;padding:3px 10px;border-radius:20px;background:var(--blue-lt,rgba(59,130,246,0.1));color:var(--muted);">⏳ โหลด...</span>
+    </div>`).join('');
   const t0=Date.now();
   const setVal=(key,val,ok=true)=>{
     const el=document.getElementById('dsync-val-'+key);
-    if(el){ el.textContent=val; el.style.color=ok?'var(--green)':'var(--red)'; }
+    if(el){
+      el.textContent=val;
+      el.style.background=ok?'rgba(16,185,129,0.1)':'rgba(239,68,68,0.1)';
+      el.style.color=ok?'var(--green)':'var(--red)';
+    }
   };
   try {
     const res=await apiCall('GET','/api/admin/db-status');
@@ -2840,9 +2858,9 @@ async function runDbSync(){
       if(entry){ const n=entry.match(/(\d+)/); setVal(it.key,(n?'✅ '+n[1]+' รายการ':'✅ โหลดแล้ว')); }
       else setVal(it.key,'✅ โหลดแล้ว');
     });
+    if(timeBadge) timeBadge.textContent=res.totalMs+'ms';
     document.getElementById('dsync-total').innerHTML=
-      `<span style="color:var(--green);font-weight:600;">✅ Force sync สำเร็จ</span> — ใช้เวลา ${res.totalMs}ms · ส่ง socket force_sync แล้ว`;
-    await syncFromServer();
+      `<span style="color:var(--green);font-weight:600;">✅ Force sync สำเร็จ</span> — ส่ง socket <code style="background:rgba(0,0,0,0.05);padding:1px 5px;border-radius:3px;">force_sync</code> ไปทุก client แล้ว`;
     showToast('ดึงข้อมูลจาก Neon DB สำเร็จ ✓','success');
   } catch(e){
     items.forEach(it=>setVal(it.key,'❌',false));
