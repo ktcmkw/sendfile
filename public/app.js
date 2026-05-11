@@ -74,7 +74,7 @@ function clearRememberAuth() {
 // ── Cache Version Check ─────────────────────────────────────────
 // When APP_VERSION changes (new deploy), automatically clears all
 // stale K.* localStorage keys so mobile browsers don't show old data
-const APP_VERSION = 'v8-20260511'; // bump → clears stale hardcoded locations/depts
+const APP_VERSION = 'v8-20260511b'; // bump → clears stale hardcoded locations/depts
 (function clearCacheOnVersionChange() {
   const stored = localStorage.getItem('sf_app_version');
   if (stored !== APP_VERSION) {
@@ -877,12 +877,12 @@ async function markAllNotifsRead(){
 }
 function displayName(u){
   if(!u) return '';
-  if(u.nickname) return escapeHtml(u.nickname)+' <span style="font-size:0.85em;color:var(--muted);">('+escapeHtml(u.fullName)+')</span>';
+  if(u.nickname) return '<strong>'+escapeHtml(u.nickname)+'</strong> <span style="font-size:0.85em;color:var(--muted);">'+escapeHtml(u.fullName)+'</span>';
   return escapeHtml(u.fullName);
 }
 function displayNamePlain(u){
   if(!u) return '';
-  return u.nickname ? u.nickname+' ('+u.fullName+')' : u.fullName;
+  return u.nickname ? u.nickname+' '+u.fullName : u.fullName;
 }
 
 function notifIcon(type){return{admin_broadcast:'📢',doc_sent:'📨',doc_sent_log:'📤',doc_received:'✅',doc_received_log:'📥',doc_deleted:'🗑️',system:'ℹ️'}[type]||'🔔';}
@@ -1354,6 +1354,10 @@ async function handlePasskeyLogin(){
   const passkey = (document.getElementById('pk-passkey')?.value||'').trim();
   if(!passkey||passkey.length!==6){ showAuthAlert('กรุณากรอก Passkey 6 หลักให้ครบ','error'); return; }
   if(!/^\d{6}$/.test(passkey)){ showAuthAlert('Passkey ต้องเป็นตัวเลข 6 หลัก','error'); return; }
+  // Clear any stale session/remember-me before fresh passkey login
+  _jwt = null; sessionStorage.removeItem(_JWT_KEY);
+  localStorage.removeItem(K.session);
+  clearRememberAuth();
   const btn = document.querySelector('#passkey-section .btn-outline');
   // visual feedback on pin digits
   document.querySelectorAll('.pin-digit').forEach(el=>{ el.style.opacity='0.5'; });
@@ -1573,12 +1577,15 @@ function enterDashboard(user){
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('dashboard').style.display='flex';
   const mbnav=document.getElementById('mobile-bottom-nav');if(mbnav)mbnav.style.display='flex';
-  const initials=(user.fullName||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const _dispName = user.nickname || user.fullName || '?';
+  const initials = _dispName.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const _subName = user.nickname ? user.fullName : '';
   document.getElementById('sb-user-info').innerHTML=`
     <div class="sb-avatar">${initials}</div>
     <div class="sb-user-info">
-      <div class="sb-user-name">${escapeHtml(user.fullName)}</div>
-      <div class="sb-user-meta">${escapeHtml(user.department)}</div>
+      <div class="sb-user-name">${escapeHtml(_dispName)}</div>
+      ${_subName ? `<div style="font-size:11px;color:var(--muted);margin-top:-2px;">${escapeHtml(_subName)}</div>` : ''}
+      <div class="sb-user-meta">${escapeHtml(user.department||'')}</div>
       <span class="role-badge">${getRoleName(user.role)}</span>
     </div>`;
   document.getElementById('nav-admin').style.display=hasAdminAccess(user)?'flex':'none';

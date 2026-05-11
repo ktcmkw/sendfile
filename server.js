@@ -483,32 +483,15 @@ app.get('/api/docs', auth, async (req, res) => {
 
 // ─── All-docs metadata (no base64, for home log — visible to ALL users) ──────
 app.get('/api/docs/all-meta', auth, async (req, res) => {
+  // Returns metadata (no content/base64) for all documents — used for org-wide activity log on home page
+  // Individual document access control is enforced in GET /api/docs/:id
   try {
-    const u = req.user;
-    const { rows: rr } = await query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]);
-    const perms = rr[0]?.permissions || {};
-    let rows;
-    if (u.role_id === 'admin' || perms.can_view_all) {
-      // Admin sees all documents
-      const r = await query(
-        'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
-        'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
-        'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
-        'FROM documents ORDER BY created_at DESC'
-      );
-      rows = r.rows;
-    } else {
-      // Non-admin: only docs where user is sender, direct recipient, or dept recipient
-      const r = await query(
-        'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
-        'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
-        'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
-        'FROM documents WHERE sender_username=$1 OR recipient_username=$1 ' +
-        'OR (recipient_type=$2 AND recipient_department=$3) ORDER BY created_at DESC',
-        [u.username, 'department', u.department]
-      );
-      rows = r.rows;
-    }
+    const { rows } = await query(
+      'SELECT id,title,content_type,sender_username,sender_full_name,sender_department,sender_location,' +
+      'recipient_type,recipient_username,recipient_department,recipient_full_name,' +
+      'priority,attachments,created_at,status,received_at,received_by,storage_location ' +
+      'FROM documents ORDER BY created_at DESC'
+    );
     res.json(rows.map(fmtDocMeta));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -843,8 +826,8 @@ app.get('/api/notifs', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/notifs', auth, admin, async (req, res) => {
-  // Admin-only: server uses pushNotif() internally; external POST requires admin role
+app.post('/api/notifs', auth, async (req, res) => {
+  // Auth-only: used by client addNotif() helper; server also uses pushNotif() internally
   try {
     const n = req.body;
     await query(
