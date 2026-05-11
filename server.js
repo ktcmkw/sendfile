@@ -692,6 +692,7 @@ app.patch('/api/docs/:id/drive', auth, async (req, res) => {
 app.delete('/api/docs/:id', auth, admin, async (req, res) => {
   try {
     const docId = req.params.id;
+    const deleteReason = (req.body?.reason || '').toString().slice(0, 500);
     // Fetch ALL needed fields BEFORE deleting (sender/recipient for notifications)
     const { rows } = await query(
       'SELECT id,title,attachments,sender_username,sender_full_name,recipient_username,recipient_type,recipient_department FROM documents WHERE id=$1',
@@ -709,7 +710,7 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
     }
     await query('DELETE FROM notifications WHERE doc_id=$1', [docId]);
     await query('DELETE FROM documents WHERE id=$1', [docId]);
-    await auditLog('doc_delete', req.user.username, docId, { title: delDoc.title }, req.ip);
+    await auditLog('doc_delete', req.user.username, docId, { title: delDoc.title, reason: deleteReason }, req.ip);
     // Emit delete event to all relevant rooms
     req.io.emit('doc_update', { type: 'deleted', docId }); // broadcast to ALL — ensures every client's cache is cleared
     req.io.emit('force_sync'); // fallback: disconnected clients will re-fetch on reconnect
@@ -719,7 +720,7 @@ app.delete('/api/docs/:id', auth, admin, async (req, res) => {
     if (delDoc.sender_username) {
       await pushNotif(req.io, { type:'doc_deleted', toUsername: delDoc.sender_username,
         fromUsername: req.user.username, fromFullName: actorName, docId,
-        message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` });
+        message: `เอกสาร "${dTitle}" ถูกลบโดย ${actorName}` + (deleteReason ? ` (สาเหตุ: ${deleteReason})` : '') });
     }
     if (delDoc.recipient_type === 'department' && delDoc.recipient_department) {
       // Notify all dept members (except sender) when a dept-addressed doc is deleted

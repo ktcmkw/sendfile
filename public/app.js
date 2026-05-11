@@ -719,10 +719,34 @@ async function cleanupExpiredDriveFiles(){
 }
 
 // ─── Admin: delete a document ──────────────────────────────────────
-async function deleteDoc(id){
+function openDeleteDocModal(id){
   const doc = getDocById(id);
-  if(!confirm(`ลบเอกสาร "${doc?.title||id}" ?
-ไม่สามารถกู้คืนได้`)) return;
+  const title = escapeHtml(doc?.title || id);
+  openModal('🗑 ลบเอกสาร',`
+    <div style="color:var(--red);font-weight:600;margin-bottom:8px;">⚠️ ไม่สามารถกู้คืนได้</div>
+    <div style="margin-bottom:12px;font-size:13px;">เอกสาร: <b>${title}</b></div>
+    <div class="form-group">
+      <label>สาเหตุการลบ <span style="color:var(--red)">* จำเป็น</span></label>
+      <textarea id="delete-reason" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--border);border-radius:var(--r);padding:8px;background:var(--white);color:var(--text);font-size:13px;"
+        placeholder="กรุณาระบุสาเหตุการลบ เช่น เอกสารซ้ำ / ส่งผิด / ข้อมูลผิดพลาด..."></textarea>
+    </div>`,
+    `<button class="btn-outline" onclick="closeModal()">ยกเลิก</button>
+     <button class="btn-danger" onclick="confirmDeleteDoc('${id}')">🗑 ยืนยันลบ</button>`);
+  setTimeout(()=>document.getElementById('delete-reason')?.focus(),200);
+}
+async function confirmDeleteDoc(id){
+  const reason = (document.getElementById('delete-reason')?.value||'').trim();
+  if(!reason){
+    const ta = document.getElementById('delete-reason');
+    if(ta){ ta.style.borderColor='var(--red)'; ta.focus(); }
+    showToast('กรุณาระบุสาเหตุการลบก่อน','error');
+    return;
+  }
+  closeModal();
+  await deleteDoc(id, reason);
+}
+async function deleteDoc(id, reason=''){
+  const doc = getDocById(id);
   // Try delete Drive files first (if user has token)
   if(doc?.attachments?.some(a=>a.driveId)){
     const cfg = getGDriveConfig();
@@ -739,7 +763,7 @@ async function deleteDoc(id){
       } catch(_){}
     }
   }
-  const r = await apiCall('DELETE','/api/docs/'+id);
+  const r = await apiCall('DELETE','/api/docs/'+id,{reason});
   if(r?.ok){
     showToast('ลบเอกสารเรียบร้อย');
     adminSelectedDoc=null;
@@ -1649,14 +1673,17 @@ function enterDashboard(user){
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('dashboard').style.display='flex';
   const mbnav=document.getElementById('mobile-bottom-nav');if(mbnav)mbnav.style.display='flex';
-  const _dispName = user.nickname || user.fullName || '?';
-  const initials = _dispName.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-  const _subName = user.nickname ? user.fullName : '';
+  const _nick = user.nickname || '';
+  const _full = user.fullName || user.username || '?';
+  const _initSrc = _nick || _full;
+  const initials = _initSrc.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const _nameHtml = _nick
+    ? `<b>${escapeHtml(_nick)}</b> <span style="font-weight:400;opacity:0.72;font-size:12px;">${escapeHtml(_full)}</span>`
+    : escapeHtml(_full);
   document.getElementById('sb-user-info').innerHTML=`
     <div class="sb-avatar">${initials}</div>
     <div class="sb-user-info">
-      <div class="sb-user-name">${escapeHtml(_dispName)}</div>
-      ${_subName ? `<div style="font-size:11px;color:var(--muted);margin-top:-2px;">${escapeHtml(_subName)}</div>` : ''}
+      <div class="sb-user-name" style="line-height:1.3;">${_nameHtml}</div>
       <div class="sb-user-meta">${escapeHtml(user.department||'')}</div>
       <span class="role-badge">${getRoleName(user.role)}</span>
     </div>`;
@@ -2618,7 +2645,7 @@ function renderAdminTab(tab){
         <td>${d.status==='received'?'<span class="badge badge-received">รับแล้ว</span>':'<span class="badge badge-pending">รอรับ</span>'}</td>
         <td style="white-space:nowrap;">
           <button class="btn-icon" onclick="event.stopPropagation();navigate('qr',{docId:'${d.id}'})" title="QR Viewer">QR</button>
-          <button class="btn-icon" style="color:var(--red);margin-left:4px;" onclick="event.stopPropagation();deleteDoc('${d.id}')" title="ลบเอกสาร">🗑</button>
+          <button class="btn-icon" style="color:var(--red);margin-left:4px;" onclick="event.stopPropagation();openDeleteDocModal('${d.id}')" title="ลบเอกสาร">🗑</button>
         </td>
       </tr>`).join('');
     const detailHtml=selDoc?`
@@ -2640,7 +2667,7 @@ function renderAdminTab(tab){
           <button class="btn-primary btn-sm" onclick="navigate('qr',{docId:'${selDoc.id}'})">🔗 ดู QR Viewer</button>
           <button class="btn-outline btn-sm" onclick="uploadDocToGoogleDrive(getDocById('${selDoc.id}'))">☁️ Upload Drive</button>
           <button class="btn-outline btn-sm" onclick="exportSingleDoc('${selDoc.id}')">⬇ Export JSON</button>
-          <button class="btn-sm" style="background:var(--red);color:#fff;border:none;border-radius:var(--r);padding:5px 12px;cursor:pointer;font-size:12px;" onclick="deleteDoc('${selDoc.id}')">🗑 ลบเอกสาร</button>
+          <button class="btn-sm" style="background:var(--red);color:#fff;border:none;border-radius:var(--r);padding:5px 12px;cursor:pointer;font-size:12px;" onclick="openDeleteDocModal('${selDoc.id}')">🗑 ลบเอกสาร</button>
         </div>
         <div style="margin-top:14px;">${renderCommentSection(selDoc)}</div>
       </div>`:`<div class="adp-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg><p style="font-weight:700;font-size:14px;">เลือกเอกสาร</p><p style="font-size:12px;margin-top:4px;">คลิกแถวทางซ้ายเพื่ออ่านเนื้อหา</p></div>`;
@@ -3345,7 +3372,8 @@ function openModal(title,content,actions='',size=''){
 }
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); }
 
-function openReceiveModal(docId){
+async function openReceiveModal(docId){
+  await ensureLocsLoaded();
   const locs=getLocations();
   const opts=locs.map(l=>`<option>${escapeHtml(l)}</option>`).join('');
   openModal('✅ รับเอกสาร',`
