@@ -934,9 +934,9 @@ function renderNotifs(){
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         ${unreadCount>0?`<button class="btn-outline btn-sm" onclick="markAllAndRender()">✓ อ่านทั้งหมด</button>`:''}
         ${isAdmin?'<button class="btn-primary btn-sm" onclick="openBroadcastModal()">📢 ส่งประกาศ</button>':''}
-        <button onclick="forceRefreshNotifs()" id="notifs-refresh-btn"
-          style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;display:flex;align-items:center;gap:5px;">
-          🔄 ${_lastSyncTime>0?Math.round((Date.now()-_lastSyncTime)/1000)+' วิที่แล้ว':'รีเฟรช'}
+        <button onclick="forceRefreshNotifs()" id="notifs-refresh-btn" class="refresh-pill-btn">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          ${_lastSyncTime>0?Math.round((Date.now()-_lastSyncTime)/1000)+' วิที่แล้ว':'รีเฟรช'}
         </button>
       </div>
     </div>${listHtml}`;
@@ -1735,11 +1735,12 @@ async function renderHome(){
       }).join('');
 
   document.getElementById('page-body').innerHTML=`
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-      <button id="page-refresh-btn" onclick="forceRefreshPage('home')"
-        style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;"
+    <div class="page-toolbar" style="margin-bottom:8px;">
+      <span class="page-toolbar-label">ภาพรวมระบบ</span>
+      <button id="page-refresh-btn" onclick="forceRefreshPage('home')" class="refresh-pill-btn"
         ${canRefreshPage('home')?'':'disabled'}>
-        🔄 ${canRefreshPage('home')?'รีเฟรช':'รออีก '+refreshCooldownSecs('home')+' วิ'}
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        ${canRefreshPage('home')?'รีเฟรช':'รออีก '+refreshCooldownSecs('home')+' วิ'}
       </button>
     </div>
   <div class="stats-grid">
@@ -2070,8 +2071,7 @@ function renderInbox(){
       <span class="filter-chip${inboxFilter==='pending'?' active':''}" onclick="inboxFilter='pending';renderInbox()">รอรับ (${pCount})</span>
       <span class="filter-chip${inboxFilter==='received'?' active':''}" onclick="inboxFilter='received';renderInbox()">รับแล้ว (${rCount})</span>
     </div>
-    <button onclick="forceRefreshInbox()" id="inbox-refresh-btn"
-      style="display:flex;align-items:center;gap:6px;padding:6px 14px;border:1.5px solid var(--blue);border-radius:20px;background:var(--white);color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;flex-shrink:0;">
+    <button onclick="forceRefreshInbox()" id="inbox-refresh-btn" class="refresh-pill-btn" style="flex-shrink:0;">
       <svg id="inbox-refresh-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
       </svg>
@@ -2114,14 +2114,15 @@ function renderOutbox(){
   const docs=outboxFilter==='all'?allDocs:outboxFilter==='pending'?allDocs.filter(d=>d.status==='pending'):allDocs.filter(d=>d.status==='received');
   const selDoc=outboxSelected?getDocById(outboxSelected):null;
   document.getElementById('page-body').innerHTML=`
+  <div class="page-toolbar">
+    <span class="page-toolbar-label">ทั้งหมด <strong>${allDocs.length}</strong> รายการ</span>
+    <button id="page-refresh-btn" onclick="forceRefreshPage('outbox')" class="refresh-pill-btn"
+      ${canRefreshPage('outbox')?'':'disabled'}>
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      ${canRefreshPage('outbox')?'รีเฟรช':'รออีก '+refreshCooldownSecs('outbox')+' วิ'}
+    </button>
+  </div>
   <div class="outbox-stats">
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-      <button id="page-refresh-btn" onclick="forceRefreshPage('outbox')"
-        style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;"
-        ${canRefreshPage('outbox')?'':'disabled'}>
-        🔄 ${canRefreshPage('outbox')?'รีเฟรช':'รออีก '+refreshCooldownSecs('outbox')+' วิ'}
-      </button>
-    </div>
     <div class="outbox-stat${outboxFilter==='all'?' active':''}" onclick="outboxFilter='all';outboxSelected=null;renderOutbox()">
       <div class="os-icon total">📤</div>
       <div><div class="os-val">${allDocs.length}</div><div class="os-label">ทั้งหมด</div></div>
@@ -2686,7 +2687,7 @@ function renderAdminTab(tab){
     </div>
     `;
   }
-  document.getElementById('page-body').innerHTML=`<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button id="page-refresh-btn" onclick="forceRefreshPage('admin')" style="background:none;border:1.5px solid var(--blue);border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;color:var(--blue);font-weight:600;" ${canRefreshPage('admin')?'':'disabled'}>🔄 ${canRefreshPage('admin')?'รีเฟรช':'รออีก '+refreshCooldownSecs('admin')+' วิ'}</button></div><div class="admin-tabs">${tabBar}</div>${content}`;
+  document.getElementById('page-body').innerHTML=`<div class="page-toolbar" style="margin-bottom:8px;"><span class="page-toolbar-label">Admin Panel</span><button id="page-refresh-btn" onclick="forceRefreshPage('admin')" class="refresh-pill-btn" ${canRefreshPage('admin')?'':'disabled'}><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>${canRefreshPage('admin')?'รีเฟรช':'รออีก '+refreshCooldownSecs('admin')+' วิ'}</button></div><div class="admin-tabs">${tabBar}</div>${content}`;
   if(tab==='settings') setTimeout(checkEmailStatus, 100);
 }
 
