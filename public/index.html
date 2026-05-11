@@ -127,43 +127,23 @@
   </nav>
   <div class="sb-footer">
     <button class="theme-btn" id="theme-toggle-btn" onclick="toggleTheme()">🌙 Dark Mode</button>
-    <div style="padding:4px 12px 8px;position:relative;">
-      <button onclick="toggleColorPicker(event)" id="color-picker-btn"
-        style="width:100%;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:9px;padding:7px 12px;cursor:pointer;color:rgba(255,255,255,0.75);font-size:12px;font-weight:600;transition:background .15s;">
-        <span id="color-picker-dot" style="width:12px;height:12px;border-radius:50%;background:var(--blue);flex-shrink:0;box-shadow:0 0 0 2px rgba(255,255,255,0.15);"></span>
-        <span>เฉดสี</span>
-        <svg style="margin-left:auto;opacity:.5;" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-      <!-- Color picker popup -->
-      <div id="color-picker-popup" style="display:none;position:absolute;bottom:calc(100% + 4px);left:12px;right:12px;background:#1a1a2e;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:12px;box-shadow:0 8px 32px rgba(0,0,0,0.6);z-index:400;">
-        <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:8px;text-align:center;letter-spacing:1px;text-transform:uppercase;">เลือกเฉดสี</div>
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;">
-          <button onclick="applyColorTheme('red');toggleColorPicker()"    id="tswatch-red"
-            style="display:flex;flex-direction:column;align-items:center;gap:4px;background:transparent;border:none;cursor:pointer;padding:4px;">
-            <span style="width:28px;height:28px;border-radius:50%;background:#dc2626;display:block;border:2px solid transparent;"></span>
-            <span style="font-size:9px;color:rgba(255,255,255,0.5);">แดง</span>
-          </button>
-          <button onclick="applyColorTheme('blue');toggleColorPicker()"   id="tswatch-blue"
-            style="display:flex;flex-direction:column;align-items:center;gap:4px;background:transparent;border:none;cursor:pointer;padding:4px;">
-            <span style="width:28px;height:28px;border-radius:50%;background:#2563eb;display:block;border:2px solid transparent;"></span>
-            <span style="font-size:9px;color:rgba(255,255,255,0.5);">น้ำเงิน</span>
-          </button>
-          <button onclick="applyColorTheme('purple');toggleColorPicker()" id="tswatch-purple"
-            style="display:flex;flex-direction:column;align-items:center;gap:4px;background:transparent;border:none;cursor:pointer;padding:4px;">
-            <span style="width:28px;height:28px;border-radius:50%;background:#7c3aed;display:block;border:2px solid transparent;"></span>
-            <span style="font-size:9px;color:rgba(255,255,255,0.5);">ม่วง</span>
-          </button>
-          <button onclick="applyColorTheme('green');toggleColorPicker()"  id="tswatch-green"
-            style="display:flex;flex-direction:column;align-items:center;gap:4px;background:transparent;border:none;cursor:pointer;padding:4px;">
-            <span style="width:28px;height:28px;border-radius:50%;background:#059669;display:block;border:2px solid transparent;"></span>
-            <span style="font-size:9px;color:rgba(255,255,255,0.5);">เขียว</span>
-          </button>
-          <button onclick="applyColorTheme('rainbow');toggleColorPicker()" id="tswatch-rainbow"
-            style="display:flex;flex-direction:column;align-items:center;gap:4px;background:transparent;border:none;cursor:pointer;padding:4px;">
-            <span style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#e11d48,#f59e0b,#10b981,#3b82f6,#7c3aed);display:block;border:2px solid transparent;"></span>
-            <span style="font-size:9px;color:rgba(255,255,255,0.5);">Rainbow</span>
-          </button>
-        </div>
+    <div style="padding:4px 12px 8px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:10px;color:rgba(255,255,255,0.45);font-weight:600;letter-spacing:0.5px;white-space:nowrap;">Theme</span>
+        <select id="theme-select" onchange="applyColorTheme(this.value)"
+          style="flex:1;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:rgba(255,255,255,0.85);font-size:11px;padding:5px 8px;cursor:pointer;outline:none;appearance:auto;-webkit-appearance:auto;">
+          <option value="red"    style="background:#1a1a2e;color:#fff;">🔴 แดง</option>
+          <option value="rose"   style="background:#1a1a2e;color:#fff;">🌸 ชมพูเข้ม</option>
+          <option value="orange" style="background:#1a1a2e;color:#fff;">🟠 ส้ม</option>
+          <option value="amber"  style="background:#1a1a2e;color:#fff;">🟡 อำพัน</option>
+          <option value="green"  style="background:#1a1a2e;color:#fff;">🟢 เขียว</option>
+          <option value="teal"   style="background:#1a1a2e;color:#fff;">🩵 ฟ้าเขียว</option>
+          <option value="blue"   style="background:#1a1a2e;color:#fff;">🔵 น้ำเงิน</option>
+          <option value="indigo" style="background:#1a1a2e;color:#fff;">💙 คราม</option>
+          <option value="purple" style="background:#1a1a2e;color:#fff;">🟣 ม่วง</option>
+          <option value="pink"   style="background:#1a1a2e;color:#fff;">💗 ชมพู</option>
+          <option value="rainbow" style="background:#1a1a2e;color:#fff;">🌈 Rainbow</option>
+        </select>
       </div>
     </div>
     <div class="logout-btn" onclick="handleLogout()">

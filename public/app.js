@@ -27,11 +27,17 @@ const REMEMBER_AUTH_KEY = 'sf_remember_auth'; // 24h remember-me for regular log
 const THEME_KEY = 'sf_color_theme'; // color accent theme
 
 const COLOR_THEMES = {
-  red:     { blue:'#dc2626', blueDk:'#b91c1c', blueLt:'rgba(220,38,38,0.08)',  glow:'rgba(220,38,38,0.15)' },
-  blue:    { blue:'#2563eb', blueDk:'#1d4ed8', blueLt:'rgba(37,99,235,0.08)',  glow:'rgba(37,99,235,0.15)' },
-  purple:  { blue:'#7c3aed', blueDk:'#6d28d9', blueLt:'rgba(124,58,237,0.08)',glow:'rgba(124,58,237,0.15)' },
-  green:   { blue:'#059669', blueDk:'#047857', blueLt:'rgba(5,150,105,0.08)',  glow:'rgba(5,150,105,0.15)' },
-  rainbow: { blue:'#e11d48', blueDk:'#be123c', blueLt:'rgba(225,29,72,0.08)', glow:'rgba(225,29,72,0.15)', rainbow:true },
+  red:    { blue:'#dc2626', blueDk:'#b91c1c', blueLt:'rgba(220,38,38,0.08)',  glow:'rgba(220,38,38,0.15)' },
+  rose:   { blue:'#e11d48', blueDk:'#be123c', blueLt:'rgba(225,29,72,0.08)',  glow:'rgba(225,29,72,0.15)' },
+  orange: { blue:'#ea580c', blueDk:'#c2410c', blueLt:'rgba(234,88,12,0.08)',  glow:'rgba(234,88,12,0.15)' },
+  amber:  { blue:'#d97706', blueDk:'#b45309', blueLt:'rgba(217,119,6,0.08)',  glow:'rgba(217,119,6,0.15)' },
+  green:  { blue:'#059669', blueDk:'#047857', blueLt:'rgba(5,150,105,0.08)',  glow:'rgba(5,150,105,0.15)' },
+  teal:   { blue:'#0891b2', blueDk:'#0e7490', blueLt:'rgba(8,145,178,0.08)',  glow:'rgba(8,145,178,0.15)' },
+  blue:   { blue:'#2563eb', blueDk:'#1d4ed8', blueLt:'rgba(37,99,235,0.08)',  glow:'rgba(37,99,235,0.15)' },
+  indigo: { blue:'#4338ca', blueDk:'#3730a3', blueLt:'rgba(67,56,202,0.08)',  glow:'rgba(67,56,202,0.15)' },
+  purple: { blue:'#7c3aed', blueDk:'#6d28d9', blueLt:'rgba(124,58,237,0.08)', glow:'rgba(124,58,237,0.15)' },
+  pink:   { blue:'#db2777', blueDk:'#be185d', blueLt:'rgba(219,39,119,0.08)', glow:'rgba(219,39,119,0.15)' },
+  rainbow:{ blue:'#e11d48', blueDk:'#be123c', blueLt:'rgba(225,29,72,0.08)',  glow:'rgba(225,29,72,0.15)', rainbow:true },
 };
 
 function applyColorTheme(theme){
@@ -57,9 +63,9 @@ function applyColorTheme(theme){
       dot.style.transform=(k===theme)?'scale(1.18)':'scale(1)';
     }
   });
-  // Sync color-picker-dot in sidebar button
-  const pickerDot=document.getElementById('color-picker-dot');
-  if(pickerDot) pickerDot.style.background=t.blue;
+  // Sync theme-select dropdown value
+  const sel=document.getElementById('theme-select');
+  if(sel) sel.value=theme;
 }
 
 function initColorTheme(){
@@ -2796,7 +2802,7 @@ function renderAdminTab(tab){
     `;
   }
   if(tab==='dbsync'){
-    content=`<div style="max-width:560px;margin:0 auto;padding:8px 0;">
+    content=`<div style="padding:4px 0;">
       <!-- compact header row -->
       <div style="display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin-bottom:14px;box-shadow:var(--shadow-sm);">
         <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--blue),var(--blue-dk));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">🗄️</div>
@@ -2891,8 +2897,8 @@ async function runDbSync(){
     items.forEach(it=>setVal(it.key,'❌',false));
     document.getElementById('dsync-total').textContent='Error: '+e.message;
   } finally {
-    _dbSyncRunning=false;
     btn.disabled=false; btn.innerHTML='🔄 ดึงข้อมูลจาก Neon DB ทันที';
+    setTimeout(()=>{_dbSyncRunning=false;},3000);
   }
 }
 
