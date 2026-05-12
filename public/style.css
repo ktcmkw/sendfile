@@ -378,7 +378,9 @@ button:disabled{opacity:.5;cursor:not-allowed;}
    PRINT
 ═══════════════════════════════════════════════ */
 @media print{
-  #dashboard,#auth-screen,.modal-overlay{display:none!important;}
+  #dashboard,#auth-screen,.modal-overlay,
+  #mobile-bottom-nav,#mobile-overlay,#fab-menu-overlay,
+  #toast,#galaxy-overlay,.theme-galaxy::before,.theme-galaxy::after{display:none!important;}
   #print-area{display:block!important;}}
 #print-area{display:none;}
 .envelope-paper{width:148mm;min-height:105mm;border:2px dashed #ccc;padding:12mm 14mm;font-family:'Sarabun','Noto Sans Thai',sans-serif;font-size:12pt;background:#fff;margin:0 auto;}

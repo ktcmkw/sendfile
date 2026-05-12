@@ -51,16 +51,15 @@ function createGalaxyElements(){
   ov.id='galaxy-overlay';
   ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:150;overflow:hidden;';
 
-  // ── 50 ⭐ ดาวกระจาย random ทั่วจอ ระยิบระยับ ──
-  for(let i=0;i<50;i++){
+  // ── 20 ⭐ ดาวกระจาย random ทั่วจอ (ลดลงจาก 50 — ไม่ลายตา) ──
+  for(let i=0;i<20;i++){
     const st=document.createElement('div');
-    // สลับ ⭐ ✦ ✧ เพื่อความหลากหลาย
-    st.textContent=i%5===0?'🌟':i%7===0?'💠':'⭐';
-    const sz=(6+Math.random()*8).toFixed(0)+'px';
+    st.textContent=i%6===0?'🌟':'⭐';
+    const sz=(7+Math.random()*7).toFixed(0)+'px';
     const top=(Math.random()*96).toFixed(1)+'%';
     const left=(Math.random()*97).toFixed(1)+'%';
-    const dur=(1.2+Math.random()*2.8).toFixed(1)+'s';
-    const delay=(Math.random()*5).toFixed(1)+'s';
+    const dur=(3+Math.random()*4).toFixed(1)+'s';   // ช้าลง 3-7s
+    const delay=(2+Math.random()*8).toFixed(1)+'s'; // delay 2-10s
     st.style.cssText=`position:absolute;font-size:${sz};top:${top};left:${left};`+
       `animation:galaxy-star-twinkle ${dur} ease-in-out infinite;animation-delay:${delay};opacity:0;`;
     ov.appendChild(st);
@@ -3656,10 +3655,13 @@ function printEnvelope(docId){
     </div>
     <div class="env-footer">พิมพ์เมื่อ ${formatDate(Date.now())} · SendFile — PEO Thailand</div>
   </div>`;
+  // fallback URL ถ้า doc.qrUrl ว่าง (เอกสารเก่าก่อนเพิ่ม column)
+  const _qrTarget = doc.qrUrl || (window.location.origin+'/?doc='+encodeURIComponent(doc.id));
   setTimeout(()=>{
-    generateQR('print-qr-box',doc.qrUrl,110);
-    setTimeout(()=>{ window.print(); printArea.innerHTML=''; },500);
-  },100);
+    generateQR('print-qr-box',_qrTarget,110);
+    // รอ QR render ให้เสร็จก่อน print (1500ms — เผื่อ slow render)
+    setTimeout(()=>{ window.print(); printArea.innerHTML=''; },1500);
+  },150);
 }
 
 // ===================================================================
