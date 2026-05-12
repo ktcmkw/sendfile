@@ -431,7 +431,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 [data-theme="dark"]{
   --sb:#060610; --sb-hov:rgba(255,255,255,0.07);
   --red:#f87171; --green:#34d399; --amber:#fbbf24; --purple:#c084fc;
-  --text:#eeeef8; --muted:#9090b8;
+  --text:#f0f0fb; --muted:#ababcf;
   --bg:#08080f; --white:#14141f; --card:#14141f;
   --border:#3c3c5e;
   --shadow-sm:0 1px 4px rgba(0,0,0,0.4),0 0 0 1px rgba(255,255,255,0.04);
@@ -501,8 +501,11 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 
 /* ── Galaxy theme ──────────────────────────────────────────────── */
 .theme-galaxy {
-  --bg:#1e0a3c; --white:#2d1b69; --card:#2d1b69;
-  --border:#7c3aed; --text:#faf5ff; --muted:#d8b4fe;
+  --bg:#0d0117; --white:#180330; --card:#180330;
+  --border:#6d28d9; --text:#ffffff; --muted:#c4b5fd;
+  --shadow-sm:0 1px 4px rgba(0,0,0,0.6),0 0 0 1px rgba(139,92,246,0.12);
+  --shadow-md:0 4px 20px rgba(0,0,0,0.7),0 0 0 1px rgba(139,92,246,0.15);
+  --shadow-lg:0 12px 40px rgba(0,0,0,0.8),0 0 0 1px rgba(139,92,246,0.20);
 }
 /* Starfield */
 .theme-galaxy::before {
@@ -598,19 +601,45 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 .theme-galaxy .stat-card,
 .theme-galaxy .doc-card,
 .theme-galaxy .modal-box {
-  background:rgba(45,27,105,.75);
-  border:1px solid rgba(167,139,250,.40);
-  box-shadow:0 0 32px rgba(167,139,250,.15),0 1px 0 rgba(255,255,255,.08) inset;
-  backdrop-filter:blur(16px);
+  background:rgba(18,3,38,.82);
+  border:1px solid rgba(109,40,217,.40);
+  box-shadow:0 4px 24px rgba(0,0,0,.60),0 0 0 1px rgba(139,92,246,.12),0 1px 0 rgba(255,255,255,.06) inset;
+  backdrop-filter:blur(18px);
 }
 /* Sidebar */
 .theme-galaxy .sidebar {
-  background:linear-gradient(180deg,#1e0a3c 0%,#2d1060 100%);
-  border-right:1px solid rgba(167,139,250,.30);
+  background:linear-gradient(180deg,#0d0117 0%,#180330 100%);
+  border-right:1px solid rgba(109,40,217,.35);
 }
-.theme-galaxy .sb-section { border-color:rgba(167,139,250,.20); }
+.theme-galaxy .sb-section { border-color:rgba(109,40,217,.20); }
+/* Input/Select/Textarea — dark purple + white text (readable) */
+.theme-galaxy input,
+.theme-galaxy select,
+.theme-galaxy textarea {
+  background:rgba(20,4,45,.90) !important;
+  border-color:rgba(109,40,217,.55) !important;
+  color:#ffffff !important;
+}
+.theme-galaxy input::placeholder,
+.theme-galaxy textarea::placeholder { color:rgba(196,181,253,.50); }
+.theme-galaxy input:focus,
+.theme-galaxy select:focus,
+.theme-galaxy textarea:focus {
+  border-color:#8b5cf6 !important;
+  background:rgba(28,6,60,.95) !important;
+  box-shadow:0 0 0 3px rgba(139,92,246,.22) !important;
+}
+.theme-galaxy .card-section { background:rgba(18,3,38,.80); border-color:rgba(109,40,217,.30); }
+.theme-galaxy .card-section-header { background:rgba(13,2,28,.90); border-bottom-color:rgba(109,40,217,.25); }
+.theme-galaxy .page-header {
+  background:rgba(10,1,20,.88);
+  border-bottom:1px solid rgba(109,40,217,.25);
+  backdrop-filter:blur(16px);
+}
+.theme-galaxy .stat-label { color:#c4b5fd; }
+.theme-galaxy .doc-meta  { color:#c4b5fd; }
 /* Content area — transparent bg เพื่อให้ galaxy-overlay(z:2) โผล่ผ่านได้
-   body bg (#06061a) เป็น base, card glassmorphism blur อยู่ด้านบน */
+   body bg (#0d0117) เป็น base, card glassmorphism blur อยู่ด้านบน */
 .theme-galaxy #main-content {
   position:relative; z-index:10;
   background:radial-gradient(ellipse 600px 400px at 80% 10%,rgba(167,139,250,.18) 0%,transparent 70%),
