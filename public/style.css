@@ -565,7 +565,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   95%  { opacity:1; }
   100% { left:106%; opacity:0; }
 }
-/* Floating planets/objects */
+/* Floating planets/objects (fallback — ไม่ใช้แล้ว ใช้ galaxy-rocket แทน) */
 @keyframes galaxy-float-0 {
   0%,100% { transform:translateY(0) rotate(0deg); }
   50%     { transform:translateY(-18px) rotate(12deg); }
@@ -577,6 +577,19 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 @keyframes galaxy-float-2 {
   0%,100% { transform:translateY(0) rotate(0deg); }
   50%     { transform:translateY(-14px) rotate(6deg); }
+}
+/* Rocket RTL — ขวา→ซ้าย */
+@keyframes galaxy-rocket-rtl {
+  0%   { right:-6%;  left:auto; opacity:0; }
+  4%   { opacity:1; }
+  95%  { opacity:1; }
+  100% { right:106%; left:auto; opacity:0; }
+}
+/* ⭐ ดาวระยิบระยับ */
+@keyframes galaxy-star-twinkle {
+  0%,100% { opacity:0.08; transform:scale(0.7); }
+  40%     { opacity:0.95; transform:scale(1.3); }
+  60%     { opacity:0.85; transform:scale(1.1); }
 }
 /* Cards */
 .theme-galaxy .card,
@@ -599,6 +612,13 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   background:radial-gradient(ellipse 600px 400px at 80% 10%,rgba(168,85,247,.05) 0%,transparent 70%),#06061a;
 }
 /* galaxy-overlay (z-index:150) ลอยเหนือ sidebar(100) แต่ต่ำกว่า modal(200)/toast(999) */
+
+/* Print: ซ่อน Galaxy effects เมื่อพิมพ์ใบปะหน้า */
+@media print {
+  #galaxy-overlay,
+  .theme-galaxy::before,
+  .theme-galaxy::after { display:none !important; }
+}
 
 /* ── Rainbow theme animation ───────────────────────────────────── */
 @keyframes rainbowHue{

@@ -46,37 +46,57 @@ function removeGalaxyElements(){
 }
 function createGalaxyElements(){
   removeGalaxyElements();
+  if(localStorage.getItem('sf_galaxy_anim')==='off') return;
   const ov=document.createElement('div');
   ov.id='galaxy-overlay';
   ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:150;overflow:hidden;';
-  // Shooting stars
-  for(let i=0;i<7;i++){
+
+  // ── 50 ⭐ ดาวกระจาย random ทั่วจอ ระยิบระยับ ──
+  for(let i=0;i<50;i++){
+    const st=document.createElement('div');
+    // สลับ ⭐ ✦ ✧ เพื่อความหลากหลาย
+    st.textContent=i%5===0?'🌟':i%7===0?'💠':'⭐';
+    const sz=(6+Math.random()*8).toFixed(0)+'px';
+    const top=(Math.random()*96).toFixed(1)+'%';
+    const left=(Math.random()*97).toFixed(1)+'%';
+    const dur=(1.2+Math.random()*2.8).toFixed(1)+'s';
+    const delay=(Math.random()*5).toFixed(1)+'s';
+    st.style.cssText=`position:absolute;font-size:${sz};top:${top};left:${left};`+
+      `animation:galaxy-star-twinkle ${dur} ease-in-out infinite;animation-delay:${delay};opacity:0;`;
+    ov.appendChild(st);
+  }
+
+  // ── 10 CSS shooting stars (เส้นแสง) ──
+  for(let i=0;i<10;i++){
     const s=document.createElement('div');
     s.className='galaxy-shoot';
-    s.style.cssText=`top:${5+Math.random()*55}%;left:${Math.random()*30}%;`+
-      `animation-delay:${(Math.random()*10).toFixed(1)}s;`+
-      `animation-duration:${(2.5+Math.random()*3).toFixed(1)}s;`;
+    s.style.cssText=`top:${(5+Math.random()*70).toFixed(1)}%;left:${(Math.random()*25).toFixed(1)}%;`+
+      `animation-delay:${(Math.random()*12).toFixed(1)}s;`+
+      `animation-duration:${(1.8+Math.random()*2.5).toFixed(1)}s;`;
     ov.appendChild(s);
   }
-  // Rocket — เดินทางข้ามจอ
-  const rocket=document.createElement('div');
-  rocket.textContent='🚀';
-  rocket.style.cssText='position:absolute;font-size:28px;top:18%;animation:galaxy-rocket 22s linear infinite;animation-delay:1s;';
-  ov.appendChild(rocket);
-  // UFO
-  const ufo=document.createElement('div');
-  ufo.textContent='🛸';
-  ufo.style.cssText='position:absolute;font-size:24px;top:55%;animation:galaxy-rocket 34s linear infinite;animation-delay:8s;';
-  ov.appendChild(ufo);
-  // Floating objects
-  const objs=[{e:'🪐',s:'26px',t:'12%',r:'6%',a:0},{e:'🌙',s:'22px',t:'70%',r:'4%',a:2},{e:'🌟',s:'20px',t:'38%',r:'2%',a:4},{e:'💫',s:'20px',t:'82%',r:'10%',a:1},{e:'☄️',s:'22px',t:'28%',r:'14%',a:3}];
-  objs.forEach(({e,s,t,r,a},i)=>{
+
+  // ── ทุกวัตถุบินข้ามจอ ──
+  // ltr = ซ้าย→ขวา (galaxy-rocket), rtl = ขวา→ซ้าย (galaxy-rocket-rtl)
+  const flyers=[
+    {e:'🚀',sz:'28px',top:'18%',dur:22,delay:1,  rtl:false},
+    {e:'🛸',sz:'24px',top:'55%',dur:34,delay:8,  rtl:true },
+    {e:'🪐',sz:'28px',top:'30%',dur:48,delay:4,  rtl:false},
+    {e:'💫',sz:'22px',top:'76%',dur:17,delay:11, rtl:true },
+    {e:'☄️',sz:'24px',top:'42%',dur:26,delay:2,  rtl:false},
+    {e:'🌙',sz:'22px',top:'8%', dur:52,delay:18, rtl:true },
+    {e:'🌟',sz:'18px',top:'88%',dur:38,delay:14, rtl:false},
+    {e:'🛰️',sz:'20px',top:'62%',dur:60,delay:25, rtl:true },
+  ];
+  flyers.forEach(({e,sz,top,dur,delay,rtl})=>{
     const el=document.createElement('div');
     el.textContent=e;
-    el.style.cssText=`position:absolute;font-size:${s};opacity:0.85;top:${t};right:${r};`+
-      `animation:galaxy-float-${i%3} ${9+i*2}s ease-in-out infinite;animation-delay:${a}s;`;
+    const anim=rtl?'galaxy-rocket-rtl':'galaxy-rocket';
+    el.style.cssText=`position:absolute;font-size:${sz};top:${top};`+
+      `animation:${anim} ${dur}s linear infinite;animation-delay:${delay}s;opacity:0;`;
     ov.appendChild(el);
   });
+
   document.body.appendChild(ov);
 }
 function applyColorTheme(theme, saveToDb=true){
@@ -123,8 +143,14 @@ function applyColorTheme(theme, saveToDb=true){
 }
 
 function initColorTheme(){
-  // เริ่มต้นเสมอเป็น red (neutral) — theme จริงถูก apply ใน enterDashboard() หลัง sync DB
-  // F5: initApp → syncFromServer → getCurrentUser (K.users มี colorTheme จาก DB) → enterDashboard
+  // อ่าน theme จาก K.users cache ทันที (ไม่ต้องรอ sync) — เร็วขึ้นมาก
+  const sess = getSession();
+  if(sess){
+    const users = store.get(K.users) || [];
+    const cu = users.find(u=>u.username===sess.username);
+    if(cu && cu.colorTheme){ applyColorTheme(cu.colorTheme, false); return; }
+  }
+  // ไม่มี cache → neutral red สำหรับ auth screen
   applyColorTheme('red', false);
 }
 
@@ -586,7 +612,38 @@ function toggleTheme(){
 }
 function updateThemeBtn(theme){
   const btn=document.getElementById('theme-toggle-btn');
-  if(btn) btn.innerHTML=theme==='dark'?'☀️ Light Mode':'🌙 Dark Mode';
+  const isGalaxy=document.documentElement.classList.contains('theme-galaxy');
+  // Dark/Light button — ซ่อนเมื่อ galaxy
+  if(btn){
+    btn.style.display=isGalaxy?'none':'';
+    if(!isGalaxy) btn.innerHTML=theme==='dark'?'☀️ Light Mode':'🌙 Dark Mode';
+  }
+  // Galaxy animation toggle button
+  let animBtn=document.getElementById('galaxy-anim-btn');
+  if(isGalaxy){
+    if(!animBtn && btn && btn.parentNode){
+      animBtn=document.createElement('button');
+      animBtn.id='galaxy-anim-btn';
+      animBtn.className='theme-btn';
+      animBtn.onclick=toggleGalaxyAnim;
+      btn.parentNode.insertBefore(animBtn,btn.nextSibling);
+    }
+    if(animBtn){
+      const animOn=localStorage.getItem('sf_galaxy_anim')!=='off';
+      animBtn.innerHTML=animOn?'✨ ปิด Animation':'✨ เปิด Animation';
+      animBtn.style.display='';
+    }
+  } else {
+    if(animBtn) animBtn.style.display='none';
+  }
+}
+function toggleGalaxyAnim(){
+  const animOn=localStorage.getItem('sf_galaxy_anim')!=='off';
+  localStorage.setItem('sf_galaxy_anim',animOn?'off':'on');
+  if(animOn){ removeGalaxyElements(); }
+  else { createGalaxyElements(); }
+  updateThemeBtn(document.documentElement.getAttribute('data-theme')||'dark');
+  showToast(animOn?'ปิด Animation แล้ว':'เปิด Animation แล้ว ✨','info');
 }
 function closeMobileSidebar(){
   const sb=document.getElementById('sidebar');
