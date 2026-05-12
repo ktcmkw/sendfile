@@ -1529,9 +1529,9 @@ function switchTab(tab){
       }
       const locSel=document.getElementById('r-location');
       if(locSel){
-        const locs=getLocations();
+        const locs=getWorkLocations();
         const curL=locSel.value;
-        locSel.innerHTML=`<option value="">-- เลือกสถานที่ --</option>`+
+        locSel.innerHTML=`<option value="">-- เลือกสถานที่ทำงาน --</option>`+
           locs.map(l=>`<option value="${escapeHtml(l)}"${curL===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
       }
     });
