@@ -8,7 +8,7 @@
   --indigo-glow:rgba(220,38,38,0.15);
   --sb:#0a0a0a; --sb-hov:rgba(255,255,255,0.06);
   --red:#ef4444; --green:#10b981; --amber:#f59e0b; --purple:#a855f7;
-  --text:#0f172a; --muted:#64748b; --border:#e2e8f0;
+  --text:#0a0a14; --muted:#475569; --border:#e2e8f0;
   --bg:#f8fafc; --white:#ffffff; --card:#ffffff;
   --r:9px; --r-lg:14px; --r-xl:20px;
   --shadow-sm:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04);
@@ -22,7 +22,14 @@
    RESET & BASE
 ═══════════════════════════════════════════════ */
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Sarabun','Noto Sans Thai',system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.65;}
+body{
+  font-family:'Sarabun','Noto Sans Thai',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);
+  font-size:14.5px;line-height:1.70;font-weight:450;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+}
 input,select,textarea,button{font-family:inherit;font-size:14px;}
 input,select,textarea{
   width:100%;padding:9px 13px;
@@ -113,7 +120,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 .tab-btn:hover{opacity:1;}
 .tab-btn.active{background:var(--white);color:var(--blue);box-shadow:var(--shadow-sm);opacity:1;}
 .form-group{margin-bottom:13px;}
-.form-group label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;}
+.form-group label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .auth-alert{padding:9px 13px;border-radius:var(--r);font-size:13px;margin-bottom:14px;display:none;font-weight:500;}
 .auth-alert.error{background:#fef2f2;color:#dc2626;border:1.5px solid #fecaca;}
@@ -431,7 +438,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 [data-theme="dark"]{
   --sb:#060610; --sb-hov:rgba(255,255,255,0.07);
   --red:#f87171; --green:#34d399; --amber:#fbbf24; --purple:#c084fc;
-  --text:#f0f0fb; --muted:#ababcf;
+  --text:#f5f5ff; --muted:#b8b8d8;
   --bg:#08080f; --white:#14141f; --card:#14141f;
   --border:#3c3c5e;
   --shadow-sm:0 1px 4px rgba(0,0,0,0.4),0 0 0 1px rgba(255,255,255,0.04);
@@ -447,6 +454,11 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 [data-theme="dark"] input:focus,[data-theme="dark"] select:focus,[data-theme="dark"] textarea:focus{border-color:var(--blue);background:#1e1e30;}
 [data-theme="dark"] .tab-bar{background:#0e0e1c;border-bottom:1px solid #2e2e48;}
 [data-theme="dark"] .tab-btn{color:var(--muted);}
+[data-theme="dark"] h1,[data-theme="dark"] h2,[data-theme="dark"] h3,
+[data-theme="dark"] .page-header h2,[data-theme="dark"] .doc-title,
+[data-theme="dark"] .stat-value,[data-theme="dark"] .sb-user-name { color:#ffffff; }
+[data-theme="dark"] .form-group label { color:#c8c8e8; font-weight:600; }
+[data-theme="dark"] .view-para { color:#e8e8f8; }
 [data-theme="dark"] .tab-btn.active{background:#1c1c2c;box-shadow:0 1px 4px rgba(0,0,0,0.5);color:var(--text);}
 [data-theme="dark"] .page-header{background:rgba(7,7,14,0.88);border-bottom:1px solid rgba(255,255,255,0.05);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 1px 0 rgba(255,255,255,0.03),0 4px 16px rgba(0,0,0,0.3);}
 [data-theme="dark"] .card-section{background:rgba(20,20,31,0.85);border:1px solid rgba(255,255,255,0.07);box-shadow:0 4px 24px rgba(0,0,0,0.45),0 0 0 1px rgba(255,255,255,0.04);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
@@ -507,6 +519,15 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   --shadow-md:0 4px 20px rgba(0,0,0,0.7),0 0 0 1px rgba(139,92,246,0.15);
   --shadow-lg:0 12px 40px rgba(0,0,0,0.8),0 0 0 1px rgba(139,92,246,0.20);
 }
+/* Galaxy text: คมชัด + weight 500 + letter-spacing */
+.theme-galaxy body,
+.theme-galaxy { font-weight:500; letter-spacing:0.012em; }
+.theme-galaxy h1,.theme-galaxy h2,.theme-galaxy h3,
+.theme-galaxy .page-header h2,.theme-galaxy .sb-user-name,
+.theme-galaxy .doc-title,.theme-galaxy .stat-value,
+.theme-galaxy .view-heading { font-weight:700; letter-spacing:-0.01em; }
+.theme-galaxy .muted,.theme-galaxy .doc-meta,
+.theme-galaxy .stat-label { font-weight:450; }
 /* Starfield */
 .theme-galaxy::before {
   content:'';
