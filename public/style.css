@@ -598,10 +598,7 @@ button:disabled{opacity:.5;cursor:not-allowed;}
 .theme-galaxy #main-content {
   background:radial-gradient(ellipse 600px 400px at 80% 10%,rgba(168,85,247,.05) 0%,transparent 70%),#06061a;
 }
-/* z-index stacking */
-.theme-galaxy .sidebar,
-.theme-galaxy #main-content,
-.theme-galaxy .modal-overlay { position:relative; z-index:1; }
+/* galaxy-overlay (z-index:150) ลอยเหนือ sidebar(100) แต่ต่ำกว่า modal(200)/toast(999) */
 
 /* ── Rainbow theme animation ───────────────────────────────────── */
 @keyframes rainbowHue{

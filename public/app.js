@@ -48,7 +48,7 @@ function createGalaxyElements(){
   removeGalaxyElements();
   const ov=document.createElement('div');
   ov.id='galaxy-overlay';
-  ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden;';
+  ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:150;overflow:hidden;';
   // Shooting stars
   for(let i=0;i<7;i++){
     const s=document.createElement('div');
@@ -61,19 +61,19 @@ function createGalaxyElements(){
   // Rocket — เดินทางข้ามจอ
   const rocket=document.createElement('div');
   rocket.textContent='🚀';
-  rocket.style.cssText='position:absolute;font-size:20px;top:18%;animation:galaxy-rocket 22s linear infinite;animation-delay:3s;';
+  rocket.style.cssText='position:absolute;font-size:28px;top:18%;animation:galaxy-rocket 22s linear infinite;animation-delay:1s;';
   ov.appendChild(rocket);
   // UFO
   const ufo=document.createElement('div');
   ufo.textContent='🛸';
-  ufo.style.cssText='position:absolute;font-size:18px;top:55%;animation:galaxy-rocket 34s linear infinite;animation-delay:14s;';
+  ufo.style.cssText='position:absolute;font-size:24px;top:55%;animation:galaxy-rocket 34s linear infinite;animation-delay:8s;';
   ov.appendChild(ufo);
   // Floating objects
-  const objs=[{e:'🪐',s:'18px',t:'12%',r:'6%',a:0},{e:'🌙',s:'14px',t:'70%',r:'4%',a:2},{e:'🌟',s:'12px',t:'38%',r:'2%',a:4},{e:'💫',s:'13px',t:'82%',r:'10%',a:1},{e:'☄️',s:'15px',t:'28%',r:'14%',a:3}];
+  const objs=[{e:'🪐',s:'26px',t:'12%',r:'6%',a:0},{e:'🌙',s:'22px',t:'70%',r:'4%',a:2},{e:'🌟',s:'20px',t:'38%',r:'2%',a:4},{e:'💫',s:'20px',t:'82%',r:'10%',a:1},{e:'☄️',s:'22px',t:'28%',r:'14%',a:3}];
   objs.forEach(({e,s,t,r,a},i)=>{
     const el=document.createElement('div');
     el.textContent=e;
-    el.style.cssText=`position:absolute;font-size:${s};opacity:0.55;top:${t};right:${r};`+
+    el.style.cssText=`position:absolute;font-size:${s};opacity:0.85;top:${t};right:${r};`+
       `animation:galaxy-float-${i%3} ${9+i*2}s ease-in-out infinite;animation-delay:${a}s;`;
     ov.appendChild(el);
   });
@@ -123,10 +123,9 @@ function applyColorTheme(theme, saveToDb=true){
 }
 
 function initColorTheme(){
-  // อ่าน theme ที่ user เลือกไว้ล่าสุด (รองรับ F5 restore)
-  // ถ้าไม่มี session จะถูก reset เป็น red ใน showAuth() ทีหลัง
-  const saved = localStorage.getItem(THEME_KEY) || 'red';
-  applyColorTheme(saved, false);
+  // เริ่มต้นเสมอเป็น red (neutral) — theme จริงถูก apply ใน enterDashboard() หลัง sync DB
+  // F5: initApp → syncFromServer → getCurrentUser (K.users มี colorTheme จาก DB) → enterDashboard
+  applyColorTheme('red', false);
 }
 
 function toggleColorPicker(e){
@@ -360,13 +359,7 @@ function startPolling() {
     if (!isLivePage && elapsed < 15000) return; // skip if polled recently on non-live page
     await syncFromServer();
     _lastSyncTime = Date.now();
-    // Apply user's saved theme (DB-first, fallback localStorage, fallback red)
-  applyColorTheme(user.colorTheme || localStorage.getItem(THEME_KEY) || 'red', false);
-  // Restore dark mode preference from localStorage
-  const _savedDark = localStorage.getItem('sendfile_theme');
-  document.documentElement.setAttribute('data-theme', _savedDark === 'dark' ? 'dark' : 'light');
-  updateThemeBtn(_savedDark === 'dark' ? 'dark' : 'light');
-  updateInboxBadge(); updateNotifBadge();
+    updateInboxBadge(); updateNotifBadge();
     if (['home','inbox','outbox','admin','notifs'].includes(activePage)) {
       navigate(activePage);
     }
@@ -1745,6 +1738,8 @@ function updateNotifBadge(){
 // DASHBOARD
 // ===================================================================
 function enterDashboard(user){
+  // Apply DB theme — saveToDb=false (already saved, just read from DB via K.users)
+  applyColorTheme(user.colorTheme || 'red', false);
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('dashboard').style.display='flex';
   const mbnav=document.getElementById('mobile-bottom-nav');if(mbnav)mbnav.style.display='flex';
