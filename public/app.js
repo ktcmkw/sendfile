@@ -49,21 +49,34 @@ function createGalaxyElements(){
   if(localStorage.getItem('sf_galaxy_anim')==='off') return;
   const ov=document.createElement('div');
   ov.id='galaxy-overlay';
-  ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:150;overflow:hidden;';
+  // z-index:2 → อยู่ข้างหลัง form/card (main-content z-index:10 อยู่ด้านบน)
+  ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:2;overflow:hidden;';
 
-  // ── 20 ⭐ ดาวกระจาย random ทั่วจอ (ลดลงจาก 50 — ไม่ลายตา) ──
-  for(let i=0;i<20;i++){
+  // ── 5 ⭐ ดาวเหลือง + 5 ★ ดาวฟ้า ──
+  const starDefs=[
+    {txt:'⭐',color:null},  {txt:'⭐',color:null},  {txt:'⭐',color:null},
+    {txt:'⭐',color:null},  {txt:'⭐',color:null},
+    {txt:'★', color:'#7dd3fc'},{txt:'★',color:'#93c5fd'},{txt:'★',color:'#60a5fa'},
+    {txt:'★', color:'#bfdbfe'},{txt:'★',color:'#7dd3fc'},
+  ];
+  // กระจาย grid สุ่มไม่ซ้ำตำแหน่ง
+  const usedPos=[];
+  starDefs.forEach(({txt,color},i)=>{
+    let top,left,safe=0;
+    do{ top=(5+Math.random()*88).toFixed(1); left=(3+Math.random()*92).toFixed(1); safe++; }
+    while(usedPos.some(p=>Math.abs(p[0]-top)<8&&Math.abs(p[1]-left)<8)&&safe<20);
+    usedPos.push([+top,+left]);
     const st=document.createElement('div');
-    st.textContent=i%6===0?'🌟':'⭐';
-    const sz=(7+Math.random()*7).toFixed(0)+'px';
-    const top=(Math.random()*96).toFixed(1)+'%';
-    const left=(Math.random()*97).toFixed(1)+'%';
-    const dur=(3+Math.random()*4).toFixed(1)+'s';   // ช้าลง 3-7s
-    const delay=(2+Math.random()*8).toFixed(1)+'s'; // delay 2-10s
-    st.style.cssText=`position:absolute;font-size:${sz};top:${top};left:${left};`+
+    st.textContent=txt;
+    const sz=(10+Math.random()*8).toFixed(0)+'px';
+    const dur=(4+Math.random()*5).toFixed(1)+'s';
+    const delay=(3+Math.random()*10).toFixed(1)+'s';
+    let css=`position:absolute;font-size:${sz};top:${top}%;left:${left}%;`+
       `animation:galaxy-star-twinkle ${dur} ease-in-out infinite;animation-delay:${delay};opacity:0;`;
+    if(color) css+=`color:${color};text-shadow:0 0 6px ${color};`;
+    st.style.cssText=css;
     ov.appendChild(st);
-  }
+  });
 
   // ── 10 CSS shooting stars (เส้นแสง) ──
   for(let i=0;i<10;i++){
