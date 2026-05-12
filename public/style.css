@@ -609,13 +609,12 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   border-right:1px solid rgba(168,85,247,.18);
 }
 .theme-galaxy .sb-section { border-color:rgba(168,85,247,.12); }
-/* Content area */
+/* Content area — transparent bg เพื่อให้ galaxy-overlay(z:2) โผล่ผ่านได้
+   body bg (#06061a) เป็น base, card glassmorphism blur อยู่ด้านบน */
 .theme-galaxy #main-content {
-  background:radial-gradient(ellipse 600px 400px at 80% 10%,rgba(168,85,247,.05) 0%,transparent 70%),#06061a;
+  position:relative; z-index:10;
+  background:radial-gradient(ellipse 600px 400px at 80% 10%,rgba(168,85,247,.07) 0%,transparent 70%);
 }
-/* galaxy-overlay z-index:2 — อยู่หลัง main-content (z-index:10) แต่เหนือ html::before (z-index:0) */
-/* form/card โปร่งแสง backdrop-filter จะเห็น animation ลางๆ ด้านหลัง */
-.theme-galaxy #main-content { position:relative; z-index:10; }
 
 /* Print: ซ่อน Galaxy effects เมื่อพิมพ์ใบปะหน้า */
 @media print {
