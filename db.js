@@ -12,6 +12,7 @@ async function initDB() {
   await pool.query(schema);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS passkey_hash VARCHAR(255);');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(100) DEFAULT \'\';');
+    await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS color_theme VARCHAR(50) DEFAULT 'red';");
   // Departments table
   await pool.query(`CREATE TABLE IF NOT EXISTS departments (
     id SERIAL PRIMARY KEY,

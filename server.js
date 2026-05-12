@@ -147,6 +147,7 @@ async function pushNotif(io, { type, toUsername, fromUsername, fromFullName, mes
 const fmtUser = u => ({
   username: u.username, fullName: u.full_name, nickname: u.nickname||'', email: u.email,
   department: u.department, location: u.location, role: u.role_id,
+  colorTheme: u.color_theme || 'red',
   createdAt: Number(u.created_at)
   // passwordHash intentionally omitted — never expose hash to client
 });
@@ -366,6 +367,16 @@ app.put('/api/users/me/profile', auth, async (req, res) => {
     await auditLog('profile_update', req.user.username, null, { fullName, nickname }, req.ip);
     const { rows } = await query('SELECT * FROM users WHERE username=$1', [req.user.username]);
     res.json(fmtUser(rows[0]));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/users/me/theme', auth, async (req, res) => {
+  try {
+    const { theme } = req.body;
+    const validThemes = ['red','rose','orange','amber','green','teal','blue','indigo','purple','pink','rainbow','galaxy'];
+    if (!theme || !validThemes.includes(theme)) return res.status(400).json({ error: 'Theme ไม่ถูกต้อง' });
+    await query('UPDATE users SET color_theme=$1 WHERE username=$2', [theme, req.user.username]);
+    res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

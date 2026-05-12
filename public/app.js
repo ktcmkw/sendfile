@@ -38,9 +38,10 @@ const COLOR_THEMES = {
   purple: { blue:'#7c3aed', blueDk:'#6d28d9', blueLt:'rgba(124,58,237,0.08)', glow:'rgba(124,58,237,0.15)' },
   pink:   { blue:'#db2777', blueDk:'#be185d', blueLt:'rgba(219,39,119,0.08)', glow:'rgba(219,39,119,0.15)' },
   rainbow:{ blue:'#e11d48', blueDk:'#be123c', blueLt:'rgba(225,29,72,0.08)',  glow:'rgba(225,29,72,0.15)', rainbow:true },
+  galaxy:{ blue:'#a855f7', blueDk:'#9333ea', blueLt:'rgba(168,85,247,0.12)',  glow:'rgba(168,85,247,0.28)', galaxy:true },
 };
 
-function applyColorTheme(theme){
+function applyColorTheme(theme, saveToDb=true){
   const t = COLOR_THEMES[theme] || COLOR_THEMES.red;
   const r = document.documentElement;
   r.style.setProperty('--blue',    t.blue);
@@ -52,7 +53,13 @@ function applyColorTheme(theme){
   } else {
     document.documentElement.classList.remove('theme-rainbow');
   }
+  if(t.galaxy){
+    document.documentElement.classList.add('theme-galaxy');
+  } else {
+    document.documentElement.classList.remove('theme-galaxy');
+  }
   localStorage.setItem(THEME_KEY, theme);
+  if(saveToDb && _jwt){ apiCall('PUT','/api/users/me/theme',{theme}).catch(()=>{}); }
   // Highlight active swatch (inner <span> inside popup buttons)
   Object.keys(COLOR_THEMES).forEach(k=>{
     const sw=document.getElementById('tswatch-'+k);
@@ -69,8 +76,10 @@ function applyColorTheme(theme){
 }
 
 function initColorTheme(){
-  const saved = localStorage.getItem(THEME_KEY) || 'red';
-  applyColorTheme(saved);
+  // Auth screen: always red theme + light mode (no user logged in yet)
+  document.documentElement.setAttribute('data-theme','light');
+  updateThemeBtn('light');
+  applyColorTheme('red', false);
 }
 
 function toggleColorPicker(e){
@@ -300,7 +309,13 @@ function startPolling() {
     if (!isLivePage && elapsed < 15000) return; // skip if polled recently on non-live page
     await syncFromServer();
     _lastSyncTime = Date.now();
-    updateInboxBadge(); updateNotifBadge();
+    // Apply user's saved theme from DB
+  applyColorTheme(user.colorTheme || 'red', false);
+  // Restore dark mode preference from localStorage
+  const _savedDark = localStorage.getItem('sendfile_theme');
+  document.documentElement.setAttribute('data-theme', _savedDark === 'dark' ? 'dark' : 'light');
+  updateThemeBtn(_savedDark === 'dark' ? 'dark' : 'light');
+  updateInboxBadge(); updateNotifBadge();
     if (['home','inbox','outbox','admin','notifs'].includes(activePage)) {
       navigate(activePage);
     }
@@ -1488,6 +1503,9 @@ async function handlePasskeyLogin(){
 
 function handleLogout(){
   stopPolling();
+  applyColorTheme('red', false);
+  document.documentElement.setAttribute('data-theme','light');
+  updateThemeBtn('light');
   clearDocSession();
   clearRememberAuth();
   _jwt=null; sessionStorage.removeItem(_JWT_KEY);
