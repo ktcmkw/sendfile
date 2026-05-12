@@ -41,6 +41,44 @@ const COLOR_THEMES = {
   galaxy:{ blue:'#a855f7', blueDk:'#9333ea', blueLt:'rgba(168,85,247,0.12)',  glow:'rgba(168,85,247,0.28)', galaxy:true },
 };
 
+function removeGalaxyElements(){
+  const el=document.getElementById('galaxy-overlay'); if(el) el.remove();
+}
+function createGalaxyElements(){
+  removeGalaxyElements();
+  const ov=document.createElement('div');
+  ov.id='galaxy-overlay';
+  ov.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden;';
+  // Shooting stars
+  for(let i=0;i<7;i++){
+    const s=document.createElement('div');
+    s.className='galaxy-shoot';
+    s.style.cssText=`top:${5+Math.random()*55}%;left:${Math.random()*30}%;`+
+      `animation-delay:${(Math.random()*10).toFixed(1)}s;`+
+      `animation-duration:${(2.5+Math.random()*3).toFixed(1)}s;`;
+    ov.appendChild(s);
+  }
+  // Rocket — เดินทางข้ามจอ
+  const rocket=document.createElement('div');
+  rocket.textContent='🚀';
+  rocket.style.cssText='position:absolute;font-size:20px;top:18%;animation:galaxy-rocket 22s linear infinite;animation-delay:3s;';
+  ov.appendChild(rocket);
+  // UFO
+  const ufo=document.createElement('div');
+  ufo.textContent='🛸';
+  ufo.style.cssText='position:absolute;font-size:18px;top:55%;animation:galaxy-rocket 34s linear infinite;animation-delay:14s;';
+  ov.appendChild(ufo);
+  // Floating objects
+  const objs=[{e:'🪐',s:'18px',t:'12%',r:'6%',a:0},{e:'🌙',s:'14px',t:'70%',r:'4%',a:2},{e:'🌟',s:'12px',t:'38%',r:'2%',a:4},{e:'💫',s:'13px',t:'82%',r:'10%',a:1},{e:'☄️',s:'15px',t:'28%',r:'14%',a:3}];
+  objs.forEach(({e,s,t,r,a},i)=>{
+    const el=document.createElement('div');
+    el.textContent=e;
+    el.style.cssText=`position:absolute;font-size:${s};opacity:0.55;top:${t};right:${r};`+
+      `animation:galaxy-float-${i%3} ${9+i*2}s ease-in-out infinite;animation-delay:${a}s;`;
+    ov.appendChild(el);
+  });
+  document.body.appendChild(ov);
+}
 function applyColorTheme(theme, saveToDb=true){
   const t = COLOR_THEMES[theme] || COLOR_THEMES.red;
   const r = document.documentElement;
@@ -55,8 +93,17 @@ function applyColorTheme(theme, saveToDb=true){
   }
   if(t.galaxy){
     document.documentElement.classList.add('theme-galaxy');
+    // Galaxy บังคับ dark mode อัตโนมัติ
+    document.documentElement.setAttribute('data-theme','dark');
+    updateThemeBtn('dark');
+    createGalaxyElements();
   } else {
     document.documentElement.classList.remove('theme-galaxy');
+    removeGalaxyElements();
+    // คืน dark/light mode ตาม preference เดิมของ user
+    const _prevMode = localStorage.getItem('sendfile_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', _prevMode);
+    updateThemeBtn(_prevMode);
   }
   localStorage.setItem(THEME_KEY, theme);
   if(saveToDb && _jwt){ apiCall('PUT','/api/users/me/theme',{theme}).catch(()=>{}); }
@@ -76,10 +123,10 @@ function applyColorTheme(theme, saveToDb=true){
 }
 
 function initColorTheme(){
-  // Auth screen: always red theme + light mode (no user logged in yet)
-  document.documentElement.setAttribute('data-theme','light');
-  updateThemeBtn('light');
-  applyColorTheme('red', false);
+  // อ่าน theme ที่ user เลือกไว้ล่าสุด (รองรับ F5 restore)
+  // ถ้าไม่มี session จะถูก reset เป็น red ใน showAuth() ทีหลัง
+  const saved = localStorage.getItem(THEME_KEY) || 'red';
+  applyColorTheme(saved, false);
 }
 
 function toggleColorPicker(e){
@@ -233,6 +280,10 @@ function showAuth() {
   document.getElementById('dashboard').style.display='none';
   document.getElementById('auth-screen').style.display='flex';
   const _mbnav=document.getElementById('mobile-bottom-nav');if(_mbnav)_mbnav.style.display='none';
+  // Auth screen: บังคับ red + light mode เสมอ
+  applyColorTheme('red', false);
+  document.documentElement.setAttribute('data-theme','light');
+  updateThemeBtn('light');
   switchTab('login');
 }
 
@@ -309,8 +360,8 @@ function startPolling() {
     if (!isLivePage && elapsed < 15000) return; // skip if polled recently on non-live page
     await syncFromServer();
     _lastSyncTime = Date.now();
-    // Apply user's saved theme from DB
-  applyColorTheme(user.colorTheme || 'red', false);
+    // Apply user's saved theme (DB-first, fallback localStorage, fallback red)
+  applyColorTheme(user.colorTheme || localStorage.getItem(THEME_KEY) || 'red', false);
   // Restore dark mode preference from localStorage
   const _savedDark = localStorage.getItem('sendfile_theme');
   document.documentElement.setAttribute('data-theme', _savedDark === 'dark' ? 'dark' : 'light');

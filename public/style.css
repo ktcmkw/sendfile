@@ -502,14 +502,6 @@ button:disabled{opacity:.5;cursor:not-allowed;}
   --bg:#06061a; --white:#0c0c22; --card:#0c0c22;
   --border:#2d1f5e; --text:#ede9fe; --muted:#9d8ec8;
 }
-@keyframes galaxy-twinkle {
-  0%,100% { opacity:.5; }
-  50%      { opacity:1; }
-}
-@keyframes nebula-drift {
-  0%,100% { transform:scale(1) translateY(0); opacity:.18; }
-  50%      { transform:scale(1.08) translateY(-12px); opacity:.26; }
-}
 /* Starfield */
 .theme-galaxy::before {
   content:'';
@@ -541,6 +533,50 @@ button:disabled{opacity:.5;cursor:not-allowed;}
     radial-gradient(ellipse 50% 60% at 80% 20%, rgba(59,130,246,.10)  0%,transparent 70%),
     radial-gradient(ellipse 45% 40% at 60% 85%, rgba(236,72,153,.09)  0%,transparent 70%);
   animation:nebula-drift 8s ease-in-out infinite;
+}
+@keyframes galaxy-twinkle {
+  0%,100% { opacity:.5; }
+  50%      { opacity:1; }
+}
+@keyframes nebula-drift {
+  0%,100% { transform:scale(1) translateY(0); opacity:.18; }
+  50%      { transform:scale(1.08) translateY(-12px); opacity:.26; }
+}
+/* Shooting star */
+.galaxy-shoot {
+  position:absolute;
+  width:90px; height:2px;
+  background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(200,160,255,.9) 60%,rgba(255,255,255,.4) 100%);
+  border-radius:2px;
+  animation:galaxy-shooting 5s linear infinite;
+  transform:rotate(-35deg);
+  opacity:0;
+}
+@keyframes galaxy-shooting {
+  0%   { transform:translateX(-80px) translateY(0)    rotate(-35deg); opacity:0; }
+  5%   { opacity:1; }
+  80%  { opacity:.8; }
+  100% { transform:translateX(115vw) translateY(38vh) rotate(-35deg); opacity:0; }
+}
+/* Rocket & UFO fly across */
+@keyframes galaxy-rocket {
+  0%   { left:-6%;  opacity:0; }
+  4%   { opacity:1; }
+  95%  { opacity:1; }
+  100% { left:106%; opacity:0; }
+}
+/* Floating planets/objects */
+@keyframes galaxy-float-0 {
+  0%,100% { transform:translateY(0) rotate(0deg); }
+  50%     { transform:translateY(-18px) rotate(12deg); }
+}
+@keyframes galaxy-float-1 {
+  0%,100% { transform:translateY(0) rotate(0deg); }
+  50%     { transform:translateY(-22px) rotate(-8deg); }
+}
+@keyframes galaxy-float-2 {
+  0%,100% { transform:translateY(0) rotate(0deg); }
+  50%     { transform:translateY(-14px) rotate(6deg); }
 }
 /* Cards */
 .theme-galaxy .card,
