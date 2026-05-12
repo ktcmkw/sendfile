@@ -38,7 +38,7 @@ const COLOR_THEMES = {
   purple: { blue:'#7c3aed', blueDk:'#6d28d9', blueLt:'rgba(124,58,237,0.08)', glow:'rgba(124,58,237,0.15)' },
   pink:   { blue:'#db2777', blueDk:'#be185d', blueLt:'rgba(219,39,119,0.08)', glow:'rgba(219,39,119,0.15)' },
   rainbow:{ blue:'#e11d48', blueDk:'#be123c', blueLt:'rgba(225,29,72,0.08)',  glow:'rgba(225,29,72,0.15)', rainbow:true },
-  galaxy:{ blue:'#a855f7', blueDk:'#9333ea', blueLt:'rgba(168,85,247,0.12)',  glow:'rgba(168,85,247,0.28)', galaxy:true },
+  galaxy:{ blue:'#c084fc', blueDk:'#a855f7', blueLt:'rgba(192,132,252,0.20)',  glow:'rgba(192,132,252,0.40)', galaxy:true },
 };
 
 function removeGalaxyElements(){
