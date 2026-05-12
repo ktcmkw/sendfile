@@ -26,6 +26,11 @@ async function initDB() {
     }
     console.log('✅ Default departments seeded');
   }
+  // Work Locations table (สถานที่ทำงาน — แยกจาก locations)
+  await pool.query(`CREATE TABLE IF NOT EXISTS work_locations (
+    name VARCHAR(100) PRIMARY KEY,
+    sort_order INT DEFAULT 0
+  )`);
   // Performance indexes
   await pool.query('CREATE INDEX IF NOT EXISTS idx_docs_sender ON documents(sender_username)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_docs_recipient ON documents(recipient_username)');

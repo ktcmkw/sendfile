@@ -766,14 +766,15 @@ app.get('/api/sync', auth, async (req, res) => {
   try {
     const u = req.user;
     // Run all queries in parallel for speed
-    const [usersR, roleR, rolesR, locsR, deptsR, notifsR, gdriveR] = await Promise.all([
+    const [usersR, roleR, rolesR, locsR, deptsR, notifsR, gdriveR, workLocsR] = await Promise.all([
       query('SELECT * FROM users ORDER BY created_at ASC'),
       query('SELECT permissions FROM roles WHERE id=$1', [u.role_id]),
       query('SELECT * FROM roles ORDER BY is_default DESC, name ASC'),
       query('SELECT name FROM locations ORDER BY id ASC'),
       query('SELECT name FROM departments ORDER BY id ASC'),
       query(`SELECT * FROM notifications WHERE to_username=$1 OR to_username='__all__' ORDER BY created_at DESC LIMIT 100`, [u.username]),
-      query("SELECT value FROM settings WHERE key='gdrive'")
+      query("SELECT value FROM settings WHERE key='gdrive'"),
+      query('SELECT name FROM work_locations ORDER BY sort_order, name')
     ]);
     const perms = roleR.rows[0]?.permissions || {};
     // Docs — scope to what this user can see
@@ -791,10 +792,11 @@ app.get('/api/sync', auth, async (req, res) => {
       users:     usersR.rows.map(fmtUser),
       docs:      docsRows.map(d => fmtDoc(d, true)),
       roles:     rolesR.rows.map(r => ({ id: r.id, name: r.name, isDefault: r.is_default, permissions: r.permissions })),
-      locations:   locsR.rows.map(r => r.name),
-      departments: deptsR.rows.map(r => r.name),
-      notifs:      notifsR.rows.map(fmtNotif),
-      gdrive:    gdriveR.rows[0] ? JSON.parse(gdriveR.rows[0].value) : null
+      locations:     locsR.rows.map(r => r.name),
+      departments:   deptsR.rows.map(r => r.name),
+      notifs:        notifsR.rows.map(fmtNotif),
+      gdrive:        gdriveR.rows[0] ? JSON.parse(gdriveR.rows[0].value) : null,
+      workLocations: workLocsR.rows.map(r => r.name)
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -806,13 +808,14 @@ app.get('/api/admin/db-status', auth, admin, async (req, res) => {
   const step = (msg, ok=true) => log.push({ msg, ok, ms: Date.now()-t0 });
   try {
     step('เชื่อมต่อ Neon PostgreSQL...');
-    const [usersR, docsR, notifsR, rolesR, deptsR, locsR] = await Promise.all([
+    const [usersR, docsR, notifsR, rolesR, deptsR, locsR, workLocsR] = await Promise.all([
       query('SELECT COUNT(*) as n FROM users'),
       query('SELECT COUNT(*) as n FROM documents'),
       query('SELECT COUNT(*) as n FROM notifications'),
       query('SELECT COUNT(*) as n FROM roles'),
       query('SELECT COUNT(*) as n FROM departments'),
-      query('SELECT COUNT(*) as n FROM locations')
+      query('SELECT COUNT(*) as n FROM locations'),
+      query('SELECT COUNT(*) as n FROM work_locations')
     ]);
     step(`Users: ${usersR.rows[0].n} รายการ`);
     step(`Documents: ${docsR.rows[0].n} รายการ`);
@@ -820,6 +823,7 @@ app.get('/api/admin/db-status', auth, admin, async (req, res) => {
     step(`Roles: ${rolesR.rows[0].n} รายการ`);
     step(`Departments: ${deptsR.rows[0].n} รายการ`);
     step(`Locations: ${locsR.rows[0].n} รายการ`);
+    step(`Work Locations: ${workLocsR.rows[0].n} รายการ`);
     step(`ดึงข้อมูลสำเร็จทั้งหมด — ใช้เวลา ${Date.now()-t0}ms`);
     // Emit force_sync so all clients refresh
     req.io.emit('force_sync');
@@ -959,6 +963,12 @@ app.get('/api/public/locations', async (req, res) => {
     res.json(rows.map(r => r.name));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+app.get('/api/public/work-locations', async (req, res) => {
+  try {
+    const { rows } = await query('SELECT name FROM work_locations ORDER BY sort_order, name');
+    res.json(rows.map(r => r.name));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/departments', auth, async (req, res) => {
   try {
@@ -1039,6 +1049,44 @@ app.put('/api/locations/:name', auth, admin, async (req, res) => {
 app.delete('/api/locations/:name', auth, admin, async (req, res) => {
   try {
     await query('DELETE FROM locations WHERE name=$1', [decodeURIComponent(req.params.name)]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Work Locations (สถานที่ทำงาน) ────────────────────────────────
+app.get('/api/work-locations', auth, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT name FROM work_locations ORDER BY sort_order, name');
+    res.json(rows.map(r => r.name));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/work-locations', auth, admin, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'ชื่อสถานที่ทำงานไม่ถูกต้อง' });
+    await query('INSERT INTO work_locations (name) VALUES($1) ON CONFLICT DO NOTHING', [name.trim()]);
+    await auditLog('work_location_add', req.user.username, null, { name }, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/work-locations/:name', auth, admin, async (req, res) => {
+  try {
+    const name = decodeURIComponent(req.params.name);
+    await query('DELETE FROM work_locations WHERE name=$1', [name]);
+    await auditLog('work_location_delete', req.user.username, null, { name }, req.ip);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/work-locations/:name', auth, admin, async (req, res) => {
+  try {
+    const oldName = decodeURIComponent(req.params.name);
+    const { newName } = req.body;
+    if (!newName?.trim()) return res.status(400).json({ error: 'ชื่อใหม่ไม่ถูกต้อง' });
+    await query('UPDATE work_locations SET name=$1 WHERE name=$2', [newName.trim(), oldName]);
+    await auditLog('work_location_rename', req.user.username, null, { oldName, newName }, req.ip);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

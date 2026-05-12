@@ -21,7 +21,7 @@ const BASE_URL = (()=>{
   if(window.location.protocol === 'file:') return 'http://localhost:8080';
   return window.location.href.replace(/[?#].*$/, '').replace(/\/$/, '');
 })();
-const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
+const K = { users:'sendfile_users', session:'sendfile_session', docs:'sendfile_documents', locs:'sendfile_locations', work_locs:'sendfile_work_locations', depts:'sendfile_departments', roles:'sendfile_roles', gdrive:'sendfile_gdrive', notifs:'sendfile_notifs' };
 const REMEMBER_KEY = 'sf_doc_session';     // 24h remembered doc-preview session
 const REMEMBER_AUTH_KEY = 'sf_remember_auth'; // 24h remember-me for regular login
 const THEME_KEY = 'sf_color_theme'; // color accent theme
@@ -207,6 +207,7 @@ async function syncFromServer() {
   if (isArr(data.docs))      localStorage.setItem(K.docs,   JSON.stringify(data.docs));
   if (isArr(data.roles))     localStorage.setItem(K.roles,  JSON.stringify(data.roles));
   if (isArr(data.locations))   localStorage.setItem(K.locs,   JSON.stringify(data.locations));
+  if (isArr(data.workLocations)) localStorage.setItem(K.work_locs, JSON.stringify(data.workLocations));
   if (isArr(data.departments)) localStorage.setItem(K.depts,  JSON.stringify(data.departments));
   if (isArr(data.notifs))      localStorage.setItem(K.notifs, JSON.stringify(data.notifs));
   if (isObj(data.gdrive) || isArr(data.gdrive)) localStorage.setItem(K.gdrive, JSON.stringify(data.gdrive));
@@ -568,6 +569,9 @@ function priorityBadge(p){
 function getLocations(){
   return store.get(K.locs) || [];
 }
+function getWorkLocations(){
+  return store.get(K.work_locs) || [];
+}
 function getDepartments(){
   return store.get(K.depts) || [];
 }
@@ -591,18 +595,20 @@ async function ensureUsersLoaded(onDone) {
 // ── Ensure locations/departments are loaded before showing dropdowns ──────────
 // If cache is empty (sync not yet complete), fetch direct from API and re-render
 async function ensureLocsLoaded() {
-  if (getLocations().length > 0 && getDepartments().length > 0) return;
+  if (getLocations().length > 0 && getDepartments().length > 0 && getWorkLocations().length > 0) return;
   try {
     // Use public endpoints when no JWT (e.g. register form before login)
     const usePublic = !_jwt;
-    const locPath  = usePublic ? '/api/public/locations'    : '/api/locations';
-    const deptPath = usePublic ? '/api/public/departments'  : '/api/departments';
+    const locPath      = usePublic ? '/api/public/locations'      : '/api/locations';
+    const deptPath     = usePublic ? '/api/public/departments'     : '/api/departments';
+    const workLocPath  = usePublic ? '/api/public/work-locations'  : '/api/work-locations';
     const fetchRaw = (path) => fetch(path).then(r=>r.json()).catch(()=>null);
-    const [l, d] = usePublic
-      ? await Promise.all([fetchRaw(locPath), fetchRaw(deptPath)])
-      : await Promise.all([apiCall('GET', locPath), apiCall('GET', deptPath)]);
+    const [l, d, wl] = usePublic
+      ? await Promise.all([fetchRaw(locPath), fetchRaw(deptPath), fetchRaw(workLocPath)])
+      : await Promise.all([apiCall('GET', locPath), apiCall('GET', deptPath), apiCall('GET', workLocPath)]);
     if (Array.isArray(l) && l.length) localStorage.setItem(K.locs, JSON.stringify(l));
     if (Array.isArray(d) && d.length) localStorage.setItem(K.depts, JSON.stringify(d));
+    if (Array.isArray(wl) && wl.length) localStorage.setItem(K.work_locs, JSON.stringify(wl));
   } catch(_) {}
 }
 
@@ -2458,7 +2464,7 @@ function renderProfile(){
   setPageTitle('ข้อมูลของฉัน','👤');
   const u=getCurrentUser();
   const initials=(u.nickname||u.fullName||'?')[0].toUpperCase();
-  const locs=getLocations();
+  const locs=getWorkLocations();
   const locOpts=locs.map(l=>`<option value="${escapeHtml(l)}"${u.location===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
   const deptOpts=getDepartments().map(d=>`<option value="${escapeHtml(d)}"${u.department===d?' selected':''}>${escapeHtml(d)}</option>`).join('');
   document.getElementById('page-body').innerHTML=`
@@ -2479,7 +2485,7 @@ function renderProfile(){
         <div class="form-group" style="margin:0;grid-column:1/-1"><label>ชื่อ-นามสกุล *</label><input id="prof-fullname" type="text" value="${escapeHtml(u.fullName)}" placeholder="ชื่อ นามสกุล"></div>
         <div class="form-group" style="margin:0;grid-column:1/-1"><label>ชื่อเล่น</label><input id="prof-nickname" type="text" value="${escapeHtml(u.nickname||'')}" placeholder="ชื่อเล่น (ไม่บังคับ)"></div>
         <div class="form-group" style="margin:0"><label>แผนก</label><select id="prof-dept" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${deptOpts}</select></div>
-        <div class="form-group" style="margin:0"><label>สถานที่</label><select id="prof-location" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${locOpts}</select></div>
+        <div class="form-group" style="margin:0"><label>สถานที่ทำงาน</label><select id="prof-location" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${locOpts}</select></div>
       </div>
       <div style="margin-top:12px;display:flex;justify-content:flex-end;">
         <button class="btn-primary btn-sm" onclick="saveProfileInfo()">💾 บันทึกข้อมูล</button>
@@ -2749,7 +2755,23 @@ function renderAdminTab(tab){
         <button class="btn-icon" style="color:var(--red)" onclick="removeDept('${escapeHtml(d)}')">🗑</button>
       </div>
     </div>`).join('');
-    content=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;">
+    const workLocs=getWorkLocations();
+    const workLocsHtml=workLocs.length?workLocs.map(l=>`
+    <div class="loc-row">
+      <input class="loc-input" type="text" value="${escapeHtml(l)}" style="display:none;flex:1;padding:4px 8px;border:1px solid var(--blue);border-radius:6px;font-size:13px;background:var(--white);color:var(--text);" onkeydown="if(event.key==='Enter')confirmRenameWorkLoc(this,'${escapeHtml(l)}');if(event.key==='Escape')cancelRename(this,'${escapeHtml(l)}')">
+      <span class="loc-label">${escapeHtml(l)}</span>
+      <div class="loc-actions">
+        <button class="btn-icon loc-edit-btn" onclick="startRename(this,'${escapeHtml(l)}')">✏️</button>
+        <button class="btn-icon loc-save-btn" style="display:none;color:var(--green)" onclick="confirmRenameWorkLoc(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✅</button>
+        <button class="btn-icon loc-cancel-btn" style="display:none;" onclick="cancelRename(this.closest('.loc-row').querySelector('.loc-input'),'${escapeHtml(l)}')">✕</button>
+        <button class="btn-icon" style="color:var(--red)" onclick="removeWorkLoc('${escapeHtml(l)}')">🗑</button>
+      </div>
+    </div>`).join(''):'<div style="color:var(--muted);font-size:13px;padding:8px 0;">ยังไม่มีสถานที่ทำงาน</div>';
+    content=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;align-items:start;">
+      <div class="card-section">
+        <div class="card-section-header">🏢 สถานที่ทำงาน <button class="btn-primary btn-sm" onclick="addWorkLoc()">+ เพิ่ม</button></div>
+        <div class="card-section-body" id="work-loc-list">${workLocsHtml}</div>
+      </div>
       <div class="card-section">
         <div class="card-section-header">📦 สถานที่จัดเก็บเอกสาร <button class="btn-primary btn-sm" onclick="addLocation()">+ เพิ่ม</button></div>
         <div class="card-section-body" id="loc-list">${locsHtml}</div>
@@ -2874,6 +2896,7 @@ async function runDbSync(){
     {key:'roles',    label:'🎭 บทบาท'},
     {key:'depts',    label:'🏢 แผนก'},
     {key:'locs',     label:'📍 สถานที่จัดเก็บ'},
+    {key:'work_locs', label:'🏢 สถานที่ทำงาน'},
   ];
   // Render skeleton rows
   const rowsEl=document.getElementById('dsync-rows');
@@ -2910,6 +2933,7 @@ async function runDbSync(){
       if(l.msg.startsWith('Roles:'))       logMap.roles=l.msg;
       if(l.msg.startsWith('Departments:')) logMap.depts=l.msg;
       if(l.msg.startsWith('Locations:'))   logMap.locs=l.msg;
+      if(l.msg.startsWith('Work Locations:')) logMap.work_locs=l.msg;
     });
     items.forEach(it=>{
       const entry=logMap[it.key];
@@ -2963,7 +2987,7 @@ function renderUserDetailPanel(username){
   const pending=docs.filter(d=>d.recipientUsername===u.username&&d.status==='pending').length;
   const initials=(u.fullName||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   const isSelf=u.username===cur.username;
-  const locs=getLocations();
+  const locs=getWorkLocations();
   const locOpts=locs.map(l=>`<option${u.location===l?' selected':''}>${escapeHtml(l)}</option>`).join('');
   const roleOpts=getRoles().map(r=>`<option value="${escapeHtml(r.id)}"${u.role===r.id?' selected':''}>${escapeHtml(r.name)}</option>`).join('');
   return `<div class="user-detail-panel">
@@ -2998,7 +3022,7 @@ function renderUserDetailPanel(username){
         <div class="udp-section-title">🏢 แผนก & สิทธิ์</div>
         <div class="udp-grid">
           <div class="form-group"><label>แผนก</label><select id="edit-dept" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${getDepartments().map(d=>`<option value="${escapeHtml(d)}" ${u.department===d?'selected':''}>${escapeHtml(d)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>สถานที่</label><select id="edit-location">${locOpts}</select></div>
+          <div class="form-group"><label>สถานที่ทำงาน</label><select id="edit-location">${locOpts}</select></div>
           <div class="form-group"><label>Role</label><select id="edit-role"${isSelf?' disabled':''}>${roleOpts}</select></div>
         </div>
       </div>
@@ -3221,6 +3245,45 @@ async function confirmRename(inp, oldName){
     cancelRename(inp, oldName);
   }
 }
+// ─── Work Location CRUD ───────────────────────────────────────────
+async function addWorkLoc(){
+  const n=(prompt('ชื่อสถานที่ทำงาน:','')||'').trim();
+  if(!n) return;
+  const res=await apiCall('POST','/api/work-locations',{name:n});
+  if(res?.ok){
+    const cur=getWorkLocations();
+    if(!cur.includes(n)){ cur.push(n); localStorage.setItem(K.work_locs,JSON.stringify(cur)); }
+    renderAdminTab('storage');
+    showToast('เพิ่มสถานที่ทำงานแล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast(res?.error||'เพิ่มไม่สำเร็จ','error');
+}
+async function removeWorkLoc(name){
+  if(!confirm('ลบสถานที่ทำงาน "'+name+'" ?')) return;
+  const res=await apiCall('DELETE','/api/work-locations/'+encodeURIComponent(name));
+  if(res?.ok){
+    localStorage.setItem(K.work_locs, JSON.stringify(getWorkLocations().filter(l=>l!==name)));
+    renderAdminTab('storage');
+    showToast('ลบสถานที่ทำงานแล้ว');
+    syncFromServer().catch(()=>{});
+  } else showToast('ลบไม่สำเร็จ','error');
+}
+async function confirmRenameWorkLoc(inp, oldName){
+  const newName = inp.value.trim();
+  if(!newName){ showToast('ชื่อต้องไม่ว่างเปล่า','error'); return; }
+  if(newName === oldName){ cancelRename(inp, oldName); return; }
+  const res = await apiCall('PUT','/api/work-locations/'+encodeURIComponent(oldName),{newName});
+  if(res?.ok){
+    localStorage.setItem(K.work_locs, JSON.stringify(getWorkLocations().map(l=>l===oldName?newName:l)));
+    showToast(`เปลี่ยนชื่อ "${oldName}" → "${newName}" เรียบร้อย`);
+    renderAdminTab('storage');
+    syncFromServer().catch(()=>{});
+  } else {
+    showToast(res?.error||'เปลี่ยนชื่อไม่สำเร็จ','error');
+    cancelRename(inp, oldName);
+  }
+}
+
 function exportDocs(){ const data=JSON.stringify(getDocs(),null,2); const blob=new Blob([data],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`sendfile_docs_${new Date().toISOString().slice(0,10)}.json`; a.click(); showToast('Export เรียบร้อย'); }
 function exportSingleDoc(id){ const doc=getDocById(id); if(!doc)return; const blob=new Blob([JSON.stringify(doc,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`${id}.json`; a.click(); showToast('Export เรียบร้อย'); }
 
@@ -3316,8 +3379,8 @@ async function deleteRole(id){
 
 async function openAddMemberModal(){
   await ensureLocsLoaded();
-  // BUG3-fix: use getLocations() so custom locations are included
-  const locs=getLocations();
+  // BUG3-fix: use getWorkLocations() so custom work locations are included
+  const locs=getWorkLocations();
   const locOpts=locs.map(l=>`<option>${escapeHtml(l)}</option>`).join('');
   openModal('เพิ่มสมาชิก',`
     <div class="form-row">
@@ -3328,7 +3391,7 @@ async function openAddMemberModal(){
     <div class="form-group"><label>ชื่อ-นามสกุล *</label><input id="am-fullname" type="text" placeholder="สมชาย มั่นคง"></div>
     <div class="form-row">
       <div class="form-group"><label>แผนก *</label><select id="am-dept" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-size:13px;background:var(--white);color:var(--text);">${getDepartments().map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}</select></div>
-      <div class="form-group"><label>สถานที่ *</label><select id="am-loc">${locOpts}</select></div>
+      <div class="form-group"><label>สถานที่ทำงาน *</label><select id="am-loc">${locOpts}</select></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>รหัสผ่าน *</label><div class="pw-wrap"><input id="am-pw" type="password" placeholder="อย่างน้อย 6 ตัว"><button type="button" class="pw-toggle" onclick="togglePw('am-pw',this)">👁</button></div></div>
